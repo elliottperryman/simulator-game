@@ -58,6 +58,18 @@ st.markdown("""
     .stSlider {
         margin-bottom: 1rem;
     }
+    .progress-container {
+        background-color: #E5E7EB;
+        border-radius: 10px;
+        height: 20px;
+        margin: 10px 0;
+        overflow: hidden;
+    }
+    .progress-bar {
+        height: 100%;
+        border-radius: 10px;
+        transition: width 0.3s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,6 +98,16 @@ if 'all_scans' not in st.session_state:
     })
 if 'show_theory' not in st.session_state:
     st.session_state.show_theory = True
+if 'temp_slider' not in st.session_state:
+    st.session_state.temp_slider = 50.0
+if 'ct_slider' not in st.session_state:
+    st.session_state.ct_slider = 60.0
+if 'np_slider' not in st.session_state:
+    st.session_state.np_slider = 30
+if 'er_slider' not in st.session_state:
+    st.session_state.er_slider = 6.0
+if 'sc_slider' not in st.session_state:
+    st.session_state.sc_slider = 5.0
 
 # ============================================================
 # Physics Constants
@@ -326,27 +348,31 @@ def add_scan(pressurized=False):
     if st.session_state.game_over:
         return
     
-    params = {
-        'T_center': st.session_state.temp_slider,
-        'count_time': st.session_state.ct_slider,
-        'npts': st.session_state.np_slider,
-        'E_range': st.session_state.er_slider,
-        'scan_center': st.session_state.sc_slider
-    }
-    
-    T = params['T_center']
-    count_time = params['count_time']
-    npts = params['npts']
-    E_range = params['E_range']
-    scan_center = params['scan_center']
+    T = st.session_state.temp_slider
+    count_time = st.session_state.ct_slider
+    npts = st.session_state.np_slider
+    E_range = st.session_state.er_slider
+    scan_center = st.session_state.sc_slider
     
     total_scan_time = count_time * npts
-    remaining_time = TIME_BUDGET - st.session_state.used_time
     
-    if remaining_time <= 0:
-        trigger_game_over()
-        return
-
+    # Check if we have enough time
+    if st.session_state.used_time + total_scan_time > TIME_BUDGET:
+        # Calculate how many points we can actually measure
+        remaining_time = TIME_BUDGET - st.session_state.used_time
+        if remaining_time <= 0:
+            trigger_game_over()
+            return
+            
+        npts_possible = int(remaining_time / count_time)
+        if npts_possible == 0:
+            trigger_game_over()
+            return
+            
+        # Use the smaller number of points
+        npts = npts_possible
+        total_scan_time = count_time * npts
+    
     st.session_state.used_time += total_scan_time
 
     # Sample actual data
@@ -379,6 +405,7 @@ def add_scan(pressurized=False):
         [st.session_state.all_scans, pd.DataFrame(rows)],
         ignore_index=True
     )
+    st.rerun()
 
 def clear_plots():
     """Clear all data and reset the game"""
@@ -405,7 +432,30 @@ def clear_plots():
 def trigger_game_over():
     """Trigger game over state"""
     st.session_state.game_over = True
-    st.toast("Game Over! Time budget exhausted!", icon="⏰")
+
+def create_custom_progress_bar(progress_ratio):
+    """Create a custom progress bar that handles values > 1.0"""
+    # Clamp progress ratio between 0 and 1 for display
+    display_ratio = min(1.0, progress_ratio)
+    
+    # Determine color based on progress
+    if progress_ratio > 1.0:
+        color = "#DC2626"  # Red for exceeded
+    elif display_ratio > 0.9:
+        color = "#F59E0B"  # Orange for high
+    elif display_ratio > 0.7:
+        color = "#3B82F6"  # Blue for medium
+    else:
+        color = "#10B981"  # Green for low
+    
+    # Create custom HTML progress bar
+    progress_html = f"""
+    <div class="progress-container">
+        <div class="progress-bar" style="width: {display_ratio * 100}%; background-color: {color};">
+        </div>
+    </div>
+    """
+    return progress_html, display_ratio
 
 def create_plots():
     """Create and return matplotlib figures"""
@@ -519,14 +569,19 @@ def create_plots():
     
     # Empty axis for controls info
     ax4.axis('off')
-    # ax4.text(0.5, 0.5, "Controls configured in sidebar\n\n" +
-    #          f"Scans collected: {len(st.session_state.all_scans)}\n" +
-    #          f"Unique temperatures: {st.session_state.all_scans['T'].nunique() if len(st.session_state.all_scans) > 0 else 0}",
-    #          horizontalalignment='center',
-    #          verticalalignment='center',
-    #          transform=ax4.transAxes,
-    #          fontsize=10,
-    #          bbox=dict(boxstyle='round', facecolor='whitesmoke', alpha=0.8))
+    scan_info = f"""
+    Scans collected: {len(st.session_state.all_scans)}
+    Unique temperatures: {st.session_state.all_scans['T'].nunique() if len(st.session_state.all_scans) > 0 else 0}
+    Non-pressurized: {len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']])}
+    Pressurized: {len(st.session_state.all_scans[st.session_state.all_scans['pressurized']])}
+    """
+    
+    ax4.text(0.5, 0.5, scan_info,
+             horizontalalignment='center',
+             verticalalignment='center',
+             transform=ax4.transAxes,
+             fontsize=10,
+             bbox=dict(boxstyle='round', facecolor='whitesmoke', alpha=0.8))
     
     plt.tight_layout()
     return fig
@@ -551,35 +606,27 @@ with st.sidebar:
     
     # Game status
     time_ratio = st.session_state.used_time / TIME_BUDGET
-    progress_color = "red" if time_ratio > 0.9 else "orange" if time_ratio > 0.7 else "blue"
     
     st.markdown(f"""
     <div class="time-box">
         <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
         <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
-        <strong>Progress:</strong> {time_ratio*100:.1f}%
+        <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
+        <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
     </div>
     """, unsafe_allow_html=True)
     
-    st.progress(time_ratio)
+    # Custom progress bar
+    progress_html, display_ratio = create_custom_progress_bar(time_ratio)
+    st.markdown(progress_html, unsafe_allow_html=True)
     
     if st.session_state.game_over:
         st.error("⏰ Game Over! Time budget exhausted!")
+        if st.button("🔄 Restart Game"):
+            clear_plots()
     
     st.markdown("---")
     st.markdown("### Scan Parameters")
-    
-    # Initialize slider values in session state if not present
-    if 'temp_slider' not in st.session_state:
-        st.session_state.temp_slider = 50.0
-    if 'ct_slider' not in st.session_state:
-        st.session_state.ct_slider = 60.0
-    if 'np_slider' not in st.session_state:
-        st.session_state.np_slider = 30
-    if 'er_slider' not in st.session_state:
-        st.session_state.er_slider = 6.0
-    if 'sc_slider' not in st.session_state:
-        st.session_state.sc_slider = 5.0
     
     # Sliders
     st.session_state.temp_slider = st.slider(
@@ -627,25 +674,32 @@ with st.sidebar:
         help="Center energy for the scan"
     )
     
+    # Calculate total scan time
+    total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
+    remaining_time = TIME_BUDGET - st.session_state.used_time
+    
+    st.info(f"**This scan will take:** {format_time_delta(total_scan_time)}")
+    
+    if total_scan_time > remaining_time and not st.session_state.game_over:
+        st.warning(f"⚠️ Not enough time for full scan! You only have {format_time_delta(remaining_time)} remaining.")
+    
     st.markdown("---")
     st.markdown("### Run Scans")
     
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📊 Non-Pressurized", 
-                    disabled=st.session_state.game_over,
+                    disabled=st.session_state.game_over or remaining_time <= 0,
                     help="Run a scan at non-pressurized conditions",
                     type="secondary"):
             add_scan(pressurized=False)
-            st.rerun()
     
     with col2:
         if st.button("🔥 Pressurized", 
-                    disabled=st.session_state.game_over,
+                    disabled=st.session_state.game_over or remaining_time <= 0,
                     help="Run a scan at pressurized conditions",
                     type="secondary"):
             add_scan(pressurized=True)
-            st.rerun()
     
     st.markdown("---")
     st.markdown("### Display Options")
@@ -703,16 +757,18 @@ with col1:
             "Pressurized Scans": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
             "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
             "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
-            "Remaining Time": f"{(TIME_BUDGET - st.session_state.used_time)/3600:.2f} hours"
+            "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
+            "Time Used Percentage": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
         }
         
-        for key, value in summary_data.items():
-            st.write(f"**{key}:** {value}")
+        cols = st.columns(3)
+        for idx, (key, value) in enumerate(summary_data.items()):
+            cols[idx % 3].metric(key, value)
     else:
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
 
 with col2:
-    st.markdown("### 📝 Recent Measurements")
+    st.markdown("### 📝 Recent Scans")
     if len(st.session_state.all_scans) > 0:
         # Show recent scans
         recent_scans = st.session_state.all_scans.tail(5)
