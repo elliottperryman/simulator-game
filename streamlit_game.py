@@ -4,10 +4,9 @@ import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 from scipy.stats import poisson
-import datetime
 import pandas as pd
-from matplotlib.colors import LinearSegmentedColormap
 import matplotlib as mpl
+from functools import wraps
 
 # ============================================================
 # Streamlit Configuration
@@ -19,95 +18,74 @@ st.set_page_config(layout="wide", page_title="Neutron Scattering Experiment Simu
 # ============================================================
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #374151;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .info-box {
-        background-color: #F3F4F6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #3B82F6;
-        margin-bottom: 1rem;
-    }
-    .score-box {
-        background-color: #EFF6FF;
-        padding: 0.75rem;
-        border-radius: 0.5rem;
-        border: 1px solid #93C5FD;
-        margin: 0.5rem 0;
-    }
-    .time-box {
-        background-color: #F0F9FF;
-        padding: 0.75rem;
-        border-radius: 0.5rem;
-        border: 1px solid #7DD3FC;
-    }
-    .stButton button {
-        width: 100%;
-        font-weight: bold;
-    }
-    .stSlider {
-        margin-bottom: 1rem;
-    }
-    .progress-container {
-        background-color: #E5E7EB;
-        border-radius: 10px;
-        height: 20px;
-        margin: 10px 0;
-        overflow: hidden;
-    }
-    .progress-bar {
-        height: 100%;
-        border-radius: 10px;
-        transition: width 0.3s ease;
-    }
+:root {
+    --bg-main: var(--background-color);
+    --bg-secondary: var(--secondary-background-color);
+    --text-color: var(--text-color);
+    --accent: var(--primary-color);
+}
+
+.main-header {
+    font-size: 2.5rem;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.info-box,
+.score-box,
+.time-box {
+    background-color: var(--bg-secondary);
+    color: var(--text-color);
+    padding: 1rem;
+    border-radius: 0.5rem;
+    border-left: 4px solid var(--accent);
+    margin-bottom: 1rem;
+}
+
+.progress-container {
+    background-color: #2A2F3A;
+    border-radius: 10px;
+    height: 20px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.3s ease;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
 # Initialize Session State
 # ============================================================
-if 'game_over' not in st.session_state:
-    st.session_state.game_over = False
-if 'used_time' not in st.session_state:
-    st.session_state.used_time = 0.0
-if 'all_scans' not in st.session_state:
-    st.session_state.all_scans = pd.DataFrame({
-        'T': pd.Series(dtype='float64'),
-        'Energy': pd.Series(dtype='float64'),
-        'counts_per_sec': pd.Series(dtype='float64'),
-        'error_l': pd.Series(dtype='float64'),
-        'error_h': pd.Series(dtype='float64'),
-        'lam': pd.Series(dtype='float64'),
-        'amp': pd.Series(dtype='float64'),
-        'E0': pd.Series(dtype='float64'),
-        'hwhm': pd.Series(dtype='float64'),
-        'bg': pd.Series(dtype='float64'),
-        'counts': pd.Series(dtype='int64'),
-        'count_time': pd.Series(dtype='float64'),
-        'pressurized': pd.Series(dtype='bool'),
-    })
-if 'show_theory' not in st.session_state:
-    st.session_state.show_theory = True
-if 'temp_slider' not in st.session_state:
-    st.session_state.temp_slider = 50.0
-if 'ct_slider' not in st.session_state:
-    st.session_state.ct_slider = 60.0
-if 'np_slider' not in st.session_state:
-    st.session_state.np_slider = 30
-if 'er_slider' not in st.session_state:
-    st.session_state.er_slider = 6.0
-if 'sc_slider' not in st.session_state:
-    st.session_state.sc_slider = 5.0
+def initialize_session_state():
+    if 'game_over' not in st.session_state:
+        st.session_state.game_over = False
+    if 'used_time' not in st.session_state:
+        st.session_state.used_time = 0.0
+    if 'all_scans' not in st.session_state:
+        st.session_state.all_scans = get_empty_scans_df()
+    if 'show_theory' not in st.session_state:
+        st.session_state.show_theory = True
+    if 'temp_slider' not in st.session_state:
+        st.session_state.temp_slider = 50.0
+    if 'ct_slider' not in st.session_state:
+        st.session_state.ct_slider = 60.0
+    if 'np_slider' not in st.session_state:
+        st.session_state.np_slider = 30
+    if 'er_slider' not in st.session_state:
+        st.session_state.er_slider = 6.0
+    if 'sc_slider' not in st.session_state:
+        st.session_state.sc_slider = 5.0
+    if 'profiling_output' not in st.session_state:
+        st.session_state.profiling_output = ""
+    if 'enable_profiling' not in st.session_state:
+        st.session_state.enable_profiling = False
+    if 'jax_warmed_up' not in st.session_state:
+        st.session_state.jax_warmed_up = False
 
 # ============================================================
 # Physics Constants
@@ -139,6 +117,76 @@ TRUE_SLOPE3_PRESSURIZED = 0.5 / 120.0
 # Game Settings
 # ============================================================
 TIME_BUDGET = 12 * 3600  # 12 hours in seconds
+
+def get_empty_scans_df():
+    """Return an empty DataFrame with the correct schema"""
+    return pd.DataFrame({
+        'T': pd.Series(dtype='float64'),
+        'Energy': pd.Series(dtype='float64'),
+        'counts_per_sec': pd.Series(dtype='float64'),
+        'error_l': pd.Series(dtype='float64'),
+        'error_h': pd.Series(dtype='float64'),
+        'lam': pd.Series(dtype='float64'),
+        'amp': pd.Series(dtype='float64'),
+        'E0': pd.Series(dtype='float64'),
+        'hwhm': pd.Series(dtype='float64'),
+        'bg': pd.Series(dtype='float64'),
+        'counts': pd.Series(dtype='int64'),
+        'count_time': pd.Series(dtype='float64'),
+        'pressurized': pd.Series(dtype='bool'),
+    })
+
+# ============================================================
+# JAX Warmup Function
+# ============================================================
+def warmup_jax():
+    """Warm up JAX compilations to avoid first-run slowdowns"""
+    if st.session_state.jax_warmed_up:
+        return
+    
+    # Dummy scan size (representative, not huge)
+    N = 30
+
+    energy = jnp.linspace(2.0, 8.0, N)
+    temp = jnp.ones(N) * 50.0
+    pressurized = jnp.zeros(N, dtype=bool)
+    count_time = jnp.ones(N) * 60.0
+
+    theta0 = jnp.array([
+        TRUE_SLOPE1_PRESSURIZED,
+        TRUE_SLOPE2_PRESSURIZED,
+        TRUE_SLOPE3_PRESSURIZED,
+        TRUE_SLOPE1_NON_PRESSURIZED,
+        TRUE_SLOPE2_NON_PRESSURIZED,
+        TRUE_SLOPE3_NON_PRESSURIZED,
+    ])
+
+    # Compile model
+    _ = meta_model(energy[0], temp[0], pressurized[0], *theta0)
+
+    # Compile lambda_model
+    _ = lambda_model(theta0, energy, temp, pressurized)
+
+    # Compile Fisher Jacobian
+    _ = lambda_model_jacobian(theta0, energy, temp, pressurized)
+
+    # Compile HWHM Jacobian
+    args = (
+        energy,
+        temp,
+        jnp.ones(N) * TRUE_AMP0,
+        jnp.ones(N) * TRUE_E00,
+        jnp.ones(N) * TRUE_HWHM0,
+        jnp.ones(N) * TRUE_BG0,
+    )
+    _ = model(*args)
+
+    _ = temperature_dependent_hwhm(temp[0], args[4], pressurized=False, 
+                               T1=50, T2=150, 
+                               slope1p=TRUE_SLOPE1_PRESSURIZED, slope2p=TRUE_SLOPE2_PRESSURIZED, slope3p=TRUE_SLOPE3_PRESSURIZED,
+                               slope1np=TRUE_SLOPE1_NON_PRESSURIZED, slope2np=TRUE_SLOPE2_NON_PRESSURIZED, slope3np=TRUE_SLOPE3_NON_PRESSURIZED)
+    
+    st.session_state.jax_warmed_up = True
 
 # ============================================================
 # Damped Harmonic Oscillator Model
@@ -276,6 +324,10 @@ def lambda_model(theta, E, T, pressurized):
       s1p, s2p, s3p, s1np, s2np, s3np)
     return rate
 
+@jax.jit
+def lambda_model_jacobian(theta0, energy, temp, pressurized):
+    return jax.jacobian(lambda_model, argnums=0)(theta0, energy, temp, pressurized)
+
 def compute_fisher_scores():
     if len(st.session_state.all_scans) == 0:
         return -np.inf, -np.inf, -np.inf
@@ -300,7 +352,7 @@ def compute_fisher_scores():
     lam = jnp.clip(lam, 1e-12, jnp.inf)
 
     # Jacobian
-    J = jax.jacobian(lambda_model, argnums=0)(theta0, E, T, pressurized)
+    J = lambda_model_jacobian(theta0, E, T, pressurized)
 
     # Fisher matrix
     W = count_time / lam
@@ -357,6 +409,7 @@ def add_scan(pressurized=False):
     total_scan_time = count_time * npts
     
     # Check if we have enough time
+    end_with_game_over = False
     if st.session_state.used_time + total_scan_time > TIME_BUDGET:
         # Calculate how many points we can actually measure
         remaining_time = TIME_BUDGET - st.session_state.used_time
@@ -365,14 +418,12 @@ def add_scan(pressurized=False):
             return
             
         npts_possible = int(remaining_time / count_time)
-        if npts_possible == 0:
-            trigger_game_over()
-            return
-            
+        end_with_game_over = True
+
         # Use the smaller number of points
         npts = npts_possible
         total_scan_time = count_time * npts
-    
+
     st.session_state.used_time += total_scan_time
 
     # Sample actual data
@@ -380,8 +431,6 @@ def add_scan(pressurized=False):
         T, TRUE_AMP0, TRUE_HWHM0, TRUE_BG0, TRUE_E00, npts, E_range, count_time, scan_center, pressurized
     )
     
-    if st.session_state.used_time >= TIME_BUDGET:
-        trigger_game_over()
     
     rows = []
     for E, cps, e, l, c in zip(Es, counts_per_sec, errors.T, lam, counts):
@@ -405,25 +454,13 @@ def add_scan(pressurized=False):
         [st.session_state.all_scans, pd.DataFrame(rows)],
         ignore_index=True
     )
+    if end_with_game_over:
+        trigger_game_over()
     st.rerun()
 
 def clear_plots():
     """Clear all data and reset the game"""
-    st.session_state.all_scans = pd.DataFrame({
-        'T': pd.Series(dtype='float64'),
-        'Energy': pd.Series(dtype='float64'),
-        'counts_per_sec': pd.Series(dtype='float64'),
-        'error_l': pd.Series(dtype='float64'),
-        'error_h': pd.Series(dtype='float64'),
-        'lam': pd.Series(dtype='float64'),
-        'amp': pd.Series(dtype='float64'),
-        'E0': pd.Series(dtype='float64'),
-        'hwhm': pd.Series(dtype='float64'),
-        'bg': pd.Series(dtype='float64'),
-        'counts': pd.Series(dtype='int64'),
-        'count_time': pd.Series(dtype='float64'),
-        'pressurized': pd.Series(dtype='bool'),
-    })
+    st.session_state.all_scans = get_empty_scans_df()
     
     st.session_state.used_time = 0.0
     st.session_state.game_over = False
@@ -459,12 +496,21 @@ def create_custom_progress_bar(progress_ratio):
 
 def create_plots():
     """Create and return matplotlib figures"""
-    # Set style
-    plt.style.use('seaborn-v0_8-darkgrid')
-    mpl.rcParams['figure.facecolor'] = 'white'
-    mpl.rcParams['axes.facecolor'] = 'whitesmoke'
-    
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    # Set style    
+    plt.style.use('dark_background')
+
+    mpl.rcParams.update({
+        'figure.facecolor': '#0E1117',
+        'axes.facecolor': '#161B22',
+        'axes.edgecolor': '#E5E7EB',
+        'axes.labelcolor': '#E5E7EB',
+        'text.color': '#E5E7EB',
+        'xtick.color': '#E5E7EB',
+        'ytick.color': '#E5E7EB',
+        'grid.color': '#374151',
+    })
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(6, 12))
     fig.suptitle('Neutron Scattering Experiment Simulator', fontsize=16, fontweight='bold')
     
     # Colormaps
@@ -552,36 +598,20 @@ def create_plots():
                             markeredgewidth=0.5, capsize=4, capthick=2,
                             label='Pressurized' if T == press_scans['T'].min() else None)
         
-        # Theoretical guides
-        if st.session_state.show_theory:
-            T_guide = np.linspace(2, 270, 100)
-            hwhm_guide_non = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, False) for T_val in T_guide]
-            hwhm_guide_press = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, True) for T_val in T_guide]
-            
-            ax3.plot(T_guide, hwhm_guide_non, '--', color='blue', alpha=0.5, label='Non-Pressurized (expected)')
-            ax3.plot(T_guide, hwhm_guide_press, '--', color='red', alpha=0.5, label='Pressurized (expected)')
+    # Theoretical guides
+    if st.session_state.show_theory:
+        T_guide = np.linspace(2, 270, 100)
+        hwhm_guide_non = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, False) for T_val in T_guide]
+        hwhm_guide_press = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, True) for T_val in T_guide]
         
+        ax3.plot(T_guide, hwhm_guide_non, '--', color='blue', alpha=0.5, label='Non-Pressurized (expected)')
+        ax3.plot(T_guide, hwhm_guide_press, '--', color='red', alpha=0.5, label='Pressurized (expected)')
+    
         # Legend
         handles, labels = ax3.get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
         if by_label:
             ax3.legend(by_label.values(), by_label.keys(), fontsize=8)
-    
-    # Empty axis for controls info
-    ax4.axis('off')
-    scan_info = f"""
-    Scans collected: {len(st.session_state.all_scans)}
-    Unique temperatures: {st.session_state.all_scans['T'].nunique() if len(st.session_state.all_scans) > 0 else 0}
-    Non-pressurized: {len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']])}
-    Pressurized: {len(st.session_state.all_scans[st.session_state.all_scans['pressurized']])}
-    """
-    
-    ax4.text(0.5, 0.5, scan_info,
-             horizontalalignment='center',
-             verticalalignment='center',
-             transform=ax4.transAxes,
-             fontsize=10,
-             bbox=dict(boxstyle='round', facecolor='whitesmoke', alpha=0.8))
     
     plt.tight_layout()
     return fig
@@ -589,161 +619,159 @@ def create_plots():
 # ============================================================
 # Main Streamlit App
 # ============================================================
-st.markdown('<h1 class="main-header">Neutron Scattering Experiment Simulator</h1>', unsafe_allow_html=True)
-
-# Header info
-st.markdown("""
-<div class="info-box">
-    <strong>Goal:</strong> Optimize your measurement strategy within 12 hours! 
-    Collect scans at different temperatures to maximize Fisher information. 
-    The Fisher score quantifies how well your measurements constrain the temperature-dependent linewidth parameters.
-</div>
-""", unsafe_allow_html=True)
-
-# Sidebar for controls
-with st.sidebar:
-    st.markdown("## 🎮 Experiment Controls")
+def main():
+    # Initialize session state
+    initialize_session_state()
     
-    # Game status
-    time_ratio = st.session_state.used_time / TIME_BUDGET
+    # JAX warmup on first run
+    if not st.session_state.jax_warmed_up:
+        warmup_jax()
     
-    st.markdown(f"""
-    <div class="time-box">
-        <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
-        <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
-        <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
-        <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
+    st.markdown('<h1 class="main-header">Neutron Scattering Experiment Simulator</h1>', unsafe_allow_html=True)
+    
+    # Header info
+    st.markdown("""
+    <div class="info-box">
+        <strong>Goal:</strong> Optimize your measurement strategy within 12 hours! 
+        Collect scans at different temperatures to maximize Fisher information. 
+        The Fisher score quantifies how well your measurements constrain the temperature-dependent linewidth parameters.
     </div>
     """, unsafe_allow_html=True)
     
-    # Custom progress bar
-    progress_html, display_ratio = create_custom_progress_bar(time_ratio)
-    st.markdown(progress_html, unsafe_allow_html=True)
-    
-    if st.session_state.game_over:
-        st.error("⏰ Game Over! Time budget exhausted!")
-        if st.button("🔄 Restart Game"):
-            clear_plots()
-    
-    st.markdown("---")
-    st.markdown("### Scan Parameters")
-    
-    # Sliders
-    st.session_state.temp_slider = st.slider(
-        "Temperature [K]",
-        min_value=2.0,
-        max_value=270.0,
-        value=st.session_state.temp_slider,
-        step=1.0,
-        help="Center temperature for the scan"
-    )
-    
-    st.session_state.ct_slider = st.slider(
-        "Counting Time per Point [s]",
-        min_value=1.0,
-        max_value=1800.0,
-        value=st.session_state.ct_slider,
-        step=1.0,
-        help="Time spent measuring each energy point"
-    )
-    
-    st.session_state.np_slider = st.slider(
-        "Number of Points",
-        min_value=1,
-        max_value=100,
-        value=st.session_state.np_slider,
-        step=1,
-        help="Number of energy points in the scan"
-    )
-    
-    st.session_state.er_slider = st.slider(
-        "Energy Range [meV]",
-        min_value=1.0,
-        max_value=8.0,
-        value=st.session_state.er_slider,
-        step=0.1,
-        help="Total energy range centered on scan center"
-    )
-    
-    st.session_state.sc_slider = st.slider(
-        "Energy Center [meV]",
-        min_value=0.1,
-        max_value=20.0,
-        value=st.session_state.sc_slider,
-        step=0.1,
-        help="Center energy for the scan"
-    )
-    
-    # Calculate total scan time
-    total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
-    remaining_time = TIME_BUDGET - st.session_state.used_time
-    
-    st.info(f"**This scan will take:** {format_time_delta(total_scan_time)}")
-    
-    if total_scan_time > remaining_time and not st.session_state.game_over:
-        st.warning(f"⚠️ Not enough time for full scan! You only have {format_time_delta(remaining_time)} remaining.")
-    
-    st.markdown("---")
-    st.markdown("### Run Scans")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📊 Non-Pressurized", 
+    # Sidebar for controls
+    with st.sidebar:
+        st.markdown("## 🎮 Experiment Controls")
+        
+        # Game status
+        time_ratio = st.session_state.used_time / TIME_BUDGET
+        
+        st.markdown(f"""
+        <div class="time-box">
+            <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
+            <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
+            <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
+            <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Custom progress bar
+        progress_html, display_ratio = create_custom_progress_bar(time_ratio)
+        st.markdown(progress_html, unsafe_allow_html=True)
+        
+        if st.session_state.game_over:
+            st.error("⏰ Game Over! Time budget exhausted!")
+            if st.button("🔄 Restart Game"):
+                clear_plots()
+        
+        st.markdown("---")
+        st.markdown("### Scan Parameters")
+        
+        # Sliders
+        st.session_state.temp_slider = st.slider(
+            "Temperature [K]",
+            min_value=2.0,
+            max_value=270.0,
+            value=st.session_state.temp_slider,
+            step=1.0,
+            help="Center temperature for the scan"
+        )
+        
+        st.session_state.ct_slider = st.slider(
+            "Counting Time per Point [s]",
+            min_value=1.0,
+            max_value=1800.0,
+            value=st.session_state.ct_slider,
+            step=1.0,
+            help="Time spent measuring each energy point"
+        )
+        
+        st.session_state.np_slider = st.slider(
+            "Number of Points",
+            min_value=1,
+            max_value=100,
+            value=st.session_state.np_slider,
+            step=1,
+            help="Number of energy points in the scan"
+        )
+        
+        st.session_state.er_slider = st.slider(
+            "Energy Range [meV]",
+            min_value=1.0,
+            max_value=8.0,
+            value=st.session_state.er_slider,
+            step=0.1,
+            help="Total energy range centered on scan center"
+        )
+        
+        st.session_state.sc_slider = st.slider(
+            "Energy Center [meV]",
+            min_value=0.1,
+            max_value=20.0,
+            value=st.session_state.sc_slider,
+            step=0.1,
+            help="Center energy for the scan"
+        )
+        
+        # Calculate total scan time
+        total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
+        remaining_time = TIME_BUDGET - st.session_state.used_time
+        
+        st.info(f"**This scan will take:** {format_time_delta(total_scan_time)}")
+        
+        if total_scan_time > remaining_time and not st.session_state.game_over:
+            st.warning(f"⚠️ Not enough time for full scan! You only have {format_time_delta(remaining_time)} remaining.")
+        
+        st.markdown("---")
+        st.markdown("### Run Scans")
+        
+        if st.button("Non-Pressurized", 
                     disabled=st.session_state.game_over or remaining_time <= 0,
                     help="Run a scan at non-pressurized conditions",
                     type="secondary"):
             add_scan(pressurized=False)
-    
-    with col2:
-        if st.button("🔥 Pressurized", 
+        
+        if st.button("Pressurized", 
                     disabled=st.session_state.game_over or remaining_time <= 0,
                     help="Run a scan at pressurized conditions",
                     type="secondary"):
             add_scan(pressurized=True)
+        
+        st.markdown("---")
+        st.markdown("### Display Options")
+        
+        if st.button("🔄 Toggle Theory Lines", 
+                    help="Show/hide theoretical prediction lines"):
+            st.session_state.show_theory = not st.session_state.show_theory
+            st.rerun()
+                
+        st.markdown("---")
+        
+        # Fisher scores
+        non_score, press_score, total_score = compute_fisher_scores()
+        
+        def format_score(score):
+            if score == -np.inf:
+                return "-∞"
+            else:
+                return f"{score:.2f}"
+        
+        st.markdown("### Fisher Information Scores")
+        st.markdown(f"""
+        <div class="score-box">
+            <strong>Non-Pressurized Score:</strong> {format_score(non_score)}
+        </div>
+        <div class="score-box">
+            <strong>Pressurized Score:</strong> {format_score(press_score)}
+        </div>
+        <div class="score-box">
+            <strong>Total Score:</strong> {format_score(total_score)}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.caption("Higher score = Better measurement precision")
+        st.caption("Score = -∞ when measurement is insufficient")
     
-    st.markdown("---")
-    st.markdown("### Display Options")
-    
-    if st.button("🔄 Toggle Theory Lines", 
-                help="Show/hide theoretical prediction lines"):
-        st.session_state.show_theory = not st.session_state.show_theory
-        st.rerun()
-    
-    if st.button("🗑️ Clear All Data", 
-                help="Reset all scans and start over",
-                type="primary"):
-        clear_plots()
-    
-    st.markdown("---")
-    
-    # Fisher scores
-    non_score, press_score, total_score = compute_fisher_scores()
-    
-    def format_score(score):
-        if score == -np.inf:
-            return "-∞"
-        else:
-            return f"{score:.2f}"
-    
-    st.markdown("### 📊 Fisher Information Scores")
-    st.markdown(f"""
-    <div class="score-box">
-        <strong>Non-Pressurized Score:</strong> {format_score(non_score)}
-    </div>
-    <div class="score-box">
-        <strong>Pressurized Score:</strong> {format_score(press_score)}
-    </div>
-    <div class="score-box" style="background-color: #E0E7FF; border-color: #4F46E5;">
-        <strong>Total Score:</strong> {format_score(total_score)}
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.caption("Higher score = Better measurement precision")
-    st.caption("Score = -∞ when measurement is insufficient")
-
-# Main content area
-col1, col2 = st.columns([3, 1])
-with col1:
+    # Main content area
     # Create and display plots
     fig = create_plots()
     st.pyplot(fig)
@@ -766,8 +794,7 @@ with col1:
             cols[idx % 3].metric(key, value)
     else:
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
-
-with col2:
+    
     st.markdown("### 📝 Recent Scans")
     if len(st.session_state.all_scans) > 0:
         # Show recent scans
@@ -788,7 +815,13 @@ with col2:
     4. Maximize your Fisher score within 12 hours
     5. Try to cover a wide temperature range!
     """)
+    
+    # Footer
+    st.markdown("---")
+    st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
 
-# Footer
-st.markdown("---")
-st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
+# ============================================================
+# Run the app
+# ============================================================
+if __name__ == "__main__":
+    main()
