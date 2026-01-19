@@ -354,38 +354,38 @@ def compute_fisher_scores():
     # Jacobian
     J = lambda_model_jacobian(theta0, E, T, pressurized)
 
-    # Fisher matrix
-    W = count_time / lam
-    FI = J.T @ (J * W[:, None])
+    J_pressurized = J[:,:3]
+    J_non_pressurized = J[:,3:]
 
-    # Separate blocks
-    FI_press = FI[:3, :3]
-    FI_non   = FI[3:, 3:]
+    lp = fisher_subfunc(J_pressurized, lam, count_time)
+    lnp = fisher_subfunc(J_non_pressurized, lam, count_time)
+    
+    return float(lnp), float(lp), float(lnp + lp)
 
+@jax.jit
+def fisher_subfunc(J, lam, count_time):
     def logdet(mat):
         sign, ld = jnp.linalg.slogdet(mat)
         return jnp.where(sign > 0, ld, -jnp.inf)
 
-    lp = logdet(FI_press)
-    lnp = logdet(FI_non)
-
-    return float(lnp), float(lp), float(lnp + lp)
+    return logdet(J.T @ (J * (count_time / lam)[:, None]))
 
 @jax.jit
 def hwhm_subfunc(args):
-    J = jax.vmap(lambda *a: jax.jacobian(model, argnums=4)(*a))(*args)
+    count_time = args[-1]
+    J = jax.vmap(lambda *a: jax.jacobian(model, argnums=4)(*a))(*args[:-1])
     J = J.reshape(-1,1)
-    lam = jax.vmap(model)(*args)
+    lam = jax.vmap(model)(*args[:-1])
     lam = jnp.clip(lam, 1e-12, jnp.inf)
     
-    W = 1.0 / lam
+    W = count_time / lam
     FI = J.T @ (J * W[:, None])
     FI = FI.squeeze()
-    err = (1/jnp.sqrt(jnp.maximum(FI, 0)))
+    err = (1/jnp.sqrt(jnp.maximum(FI, 1e-3)))
     return err
 
 def compute_hwhm_err(df):
-    args = jnp.array(df[['Energy', 'T', 'amp', 'E0', 'hwhm', 'bg']].values.T)
+    args = jnp.array(df[['Energy', 'T', 'amp', 'E0', 'hwhm', 'bg', 'count_time']].values.T)
     return hwhm_subfunc(args)
 
 def format_time_delta(seconds):
@@ -456,7 +456,7 @@ def add_scan(pressurized=False):
     )
     if end_with_game_over:
         trigger_game_over()
-    st.rerun()
+    # st.rerun()
 
 def clear_plots():
     """Clear all data and reset the game"""
@@ -514,8 +514,8 @@ def create_plots():
     fig.suptitle('Neutron Scattering Experiment Simulator', fontsize=16, fontweight='bold')
     
     # Colormaps
-    cmap_non_pressurized = plt.get_cmap('viridis')
-    cmap_pressurized = plt.get_cmap('plasma')
+    cmap_non_pressurized = plt.get_cmap('Wistia')
+    cmap_pressurized = plt.get_cmap('Wistia')
     
     # Plot non-pressurized data
     ax1.set_title("Non-Pressurized Energy Scans", fontsize=11, fontweight='bold')
@@ -573,7 +573,7 @@ def create_plots():
     ax3.set_ylabel("HWHM [meV]", fontsize=9)
     ax3.grid(True, alpha=0.3)
     ax3.set_ylim(0, 1)
-    ax3.set_xlim(min_t, max_t + 1)
+    ax3.set_xlim(min_t-2, max_t + 1)
     
     if len(st.session_state.all_scans) > 0:
         # Non-pressurized measurements
@@ -582,8 +582,8 @@ def create_plots():
             if len(df) > 0:
                 hwhm_err = compute_hwhm_err(df)
                 ax3.errorbar(T, df['hwhm'].mean(), hwhm_err,
-                            linestyle='none', color='blue', linewidth=2,
-                            marker='o', markersize=6, markeredgecolor='darkblue',
+                            linestyle='none', color='gold', linewidth=2,
+                            marker='o', markersize=6, markeredgecolor='gold',
                             markeredgewidth=0.5, capsize=4, capthick=2,
                             label='Non-Pressurized' if T == non_press_scans['T'].min() else None)
         
@@ -594,7 +594,7 @@ def create_plots():
                 hwhm_err = compute_hwhm_err(df)
                 ax3.errorbar(T, df['hwhm'].mean(), hwhm_err,
                             linestyle='none', color='red', linewidth=2,
-                            marker='o', markersize=6, markeredgecolor='darkred',
+                            marker='o', markersize=6, markeredgecolor='red',
                             markeredgewidth=0.5, capsize=4, capthick=2,
                             label='Pressurized' if T == press_scans['T'].min() else None)
         
@@ -604,7 +604,7 @@ def create_plots():
         hwhm_guide_non = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, False) for T_val in T_guide]
         hwhm_guide_press = [temperature_dependent_hwhm(T_val, TRUE_HWHM0, True) for T_val in T_guide]
         
-        ax3.plot(T_guide, hwhm_guide_non, '--', color='blue', alpha=0.5, label='Non-Pressurized (expected)')
+        ax3.plot(T_guide, hwhm_guide_non, '--', color='gold', alpha=0.5, label='Non-Pressurized (expected)')
         ax3.plot(T_guide, hwhm_guide_press, '--', color='red', alpha=0.5, label='Pressurized (expected)')
     
         # Legend
@@ -642,79 +642,97 @@ def main():
     with st.sidebar:
         st.markdown("## 🎮 Experiment Controls")
         
-        # Game status
-        time_ratio = st.session_state.used_time / TIME_BUDGET
+        # # Game status
+        # time_ratio = st.session_state.used_time / TIME_BUDGET
         
-        st.markdown(f"""
-        <div class="time-box">
-            <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
-            <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
-            <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
-            <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
-        </div>
-        """, unsafe_allow_html=True)
+        # st.markdown(f"""
+        # <div class="time-box">
+        #     <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
+        #     <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
+        #     <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
+        #     <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
+        # </div>
+        # """, unsafe_allow_html=True)
         
-        # Custom progress bar
-        progress_html, display_ratio = create_custom_progress_bar(time_ratio)
-        st.markdown(progress_html, unsafe_allow_html=True)
+        # # Custom progress bar
+        # progress_html, display_ratio = create_custom_progress_bar(time_ratio)
+        # st.markdown(progress_html, unsafe_allow_html=True)
+        total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
+        remaining_time = TIME_BUDGET - st.session_state.used_time
+
+
+        if st.button("Scan Non-Pressurized Sample", 
+                    disabled=st.session_state.game_over or remaining_time <= 0,
+                    help="Run a scan at non-pressurized conditions",
+                    type="secondary"):
+            add_scan(pressurized=False)
         
+        if st.button("Scan Pressurized Sample", 
+                    disabled=st.session_state.game_over or remaining_time <= 0,
+                    help="Run a scan at pressurized conditions",
+                    type="secondary"):
+            add_scan(pressurized=True)
+
         if st.session_state.game_over:
             st.error("⏰ Game Over! Time budget exhausted!")
-            if st.button("🔄 Restart Game"):
-                clear_plots()
+        if st.button("🔄 Restart Game"):
+            clear_plots()
         
+        if st.button("🔄 Toggle Theory Lines", 
+                help="Show/hide theoretical prediction lines"):
+            st.session_state.show_theory = not st.session_state.show_theory
+            st.rerun()
+
         st.markdown("---")
         st.markdown("### Scan Parameters")
         
         # Sliders
-        st.session_state.temp_slider = st.slider(
+        st.slider(
             "Temperature [K]",
             min_value=2.0,
             max_value=270.0,
-            value=st.session_state.temp_slider,
+            key='temp_slider',
             step=1.0,
             help="Center temperature for the scan"
         )
         
-        st.session_state.ct_slider = st.slider(
+        st.slider(
             "Counting Time per Point [s]",
             min_value=1.0,
             max_value=1800.0,
-            value=st.session_state.ct_slider,
             step=1.0,
+            key="ct_slider",
             help="Time spent measuring each energy point"
         )
         
-        st.session_state.np_slider = st.slider(
+        st.slider(
             "Number of Points",
             min_value=1,
             max_value=100,
-            value=st.session_state.np_slider,
+            key='np_slider',
             step=1,
             help="Number of energy points in the scan"
         )
         
-        st.session_state.er_slider = st.slider(
+        st.slider(
             "Energy Range [meV]",
             min_value=1.0,
             max_value=8.0,
-            value=st.session_state.er_slider,
+            key='er_slider',
             step=0.1,
             help="Total energy range centered on scan center"
         )
         
-        st.session_state.sc_slider = st.slider(
+        st.slider(
             "Energy Center [meV]",
             min_value=0.1,
             max_value=20.0,
-            value=st.session_state.sc_slider,
+            key='sc_slider',
             step=0.1,
             help="Center energy for the scan"
         )
         
         # Calculate total scan time
-        total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
-        remaining_time = TIME_BUDGET - st.session_state.used_time
         
         st.info(f"**This scan will take:** {format_time_delta(total_scan_time)}")
         
@@ -722,30 +740,7 @@ def main():
             st.warning(f"⚠️ Not enough time for full scan! You only have {format_time_delta(remaining_time)} remaining.")
         
         st.markdown("---")
-        st.markdown("### Run Scans")
-        
-        if st.button("Non-Pressurized", 
-                    disabled=st.session_state.game_over or remaining_time <= 0,
-                    help="Run a scan at non-pressurized conditions",
-                    type="secondary"):
-            add_scan(pressurized=False)
-        
-        if st.button("Pressurized", 
-                    disabled=st.session_state.game_over or remaining_time <= 0,
-                    help="Run a scan at pressurized conditions",
-                    type="secondary"):
-            add_scan(pressurized=True)
-        
-        st.markdown("---")
-        st.markdown("### Display Options")
-        
-        if st.button("🔄 Toggle Theory Lines", 
-                    help="Show/hide theoretical prediction lines"):
-            st.session_state.show_theory = not st.session_state.show_theory
-            st.rerun()
                 
-        st.markdown("---")
-        
         # Fisher scores
         non_score, press_score, total_score = compute_fisher_scores()
         
@@ -777,12 +772,12 @@ def main():
     st.pyplot(fig)
     
     # Data summary
-    st.markdown("### 📈 Data Summary")
+    st.markdown("### Data Summary")
     if len(st.session_state.all_scans) > 0:
         summary_data = {
             "Total Scans": len(st.session_state.all_scans),
-            "Non-Pressurized Scans": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
-            "Pressurized Scans": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
+            "Non-Pressurized Measurements": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
+            "Pressurized Measurements": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
             "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
             "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
             "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
@@ -795,16 +790,16 @@ def main():
     else:
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
     
-    st.markdown("### 📝 Recent Scans")
-    if len(st.session_state.all_scans) > 0:
-        # Show recent scans
-        recent_scans = st.session_state.all_scans.tail(5)
-        for _, scan in recent_scans.iterrows():
-            condition = "Pressurized" if scan['pressurized'] else "Non-Pressurized"
-            st.write(f"**{condition}** at T={scan['T']:.1f}K")
-            st.caption(f"Energy: {scan['Energy']:.2f} meV, Counts: {scan['counts']}")
-    else:
-        st.write("No scans yet")
+    # st.markdown("### 📝 Recent Scans")
+    # if len(st.session_state.all_scans) > 0:
+    #     # Show recent scans
+    #     recent_scans = st.session_state.all_scans.tail(5)
+    #     for _, scan in recent_scans.iterrows():
+    #         condition = "Pressurized" if scan['pressurized'] else "Non-Pressurized"
+    #         st.write(f"**{condition}** at T={scan['T']:.1f}K")
+    #         st.caption(f"Energy: {scan['Energy']:.2f} meV, Counts: {scan['counts']}")
+    # else:
+    #     st.write("No scans yet")
     
     st.markdown("---")
     st.markdown("### ℹ️ How to Play")
@@ -815,7 +810,176 @@ def main():
     4. Maximize your Fisher score within 12 hours
     5. Try to cover a wide temperature range!
     """)
+    st.markdown('---')
+    st.markdown('### Understanding the Game')
     
+
+    st.markdown("## Introduction")
+
+    st.markdown("### Motivation")
+    st.markdown("""
+    Modern neutron scattering experiments face increasing complexity:
+
+    - Increasing count rates  
+    - Increasing neutron flux  
+    - Larger, higher-dimensional datasets  
+    - Limited beam time  
+    - Human-driven experiment design does not scale  
+
+    **Goal:** automate experiment design using physics-informed statistical models.
+    """)
+
+    st.markdown("---")
+    st.markdown("## Understanding an Experiment")
+    st.markdown("### What does a measurement mean?")
+    st.markdown("""
+    - A measurement is a **random variable**
+    - Experimental results must include **uncertainty**
+    - Question is not *what value*, but *how well do we know it?*
+    """)
+
+    st.markdown("---")
+    st.markdown("## Statistical View of Experiments")
+    st.markdown("### Measurement Model")
+    st.markdown("Let a measurement $x$ depend on parameters $\\theta$:")
+
+    st.latex(r"x = f(\theta) + \epsilon")
+
+    st.markdown("where noise $\\epsilon$ is stochastic.")
+
+    st.markdown("---")
+    st.markdown("### Common Noise Models")
+    st.markdown("#### Poisson (counting experiments)")
+
+    st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
+
+    st.markdown("#### Gaussian (high-count limit)")
+
+    st.latex(r"""
+    P(x \mid \mu, \sigma) =
+    \frac{1}{\sqrt{2\pi\sigma^2}}
+    \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
+    """)
+
+    st.markdown("---")
+    st.markdown("## Likelihood Functions")
+    st.markdown("Given data $\\{x_i\\}$ and parameters $\\theta$:")
+
+    st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
+
+    st.markdown("Log-likelihood:")
+
+    st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
+
+    st.markdown("---")
+    st.markdown("## Maximum Likelihood Estimation (MLE)")
+    st.markdown("Estimate parameters by maximizing likelihood:")
+
+    st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
+
+    st.markdown("---")
+    st.markdown("### Gaussian Special Case")
+    st.markdown("For Gaussian noise with variance $\\sigma^2$:")
+
+    st.latex(r"""
+    \log \mathcal{L}
+    = -\frac{1}{2}
+    \sum_i
+    \left[
+    \frac{(x_i - f_i(\theta))^2}{\sigma^2}
+    + \log(2\pi\sigma^2)
+    \right]
+    """)
+
+    st.markdown("Equivalent to **least-squares minimization**.")
+
+    st.markdown("---")
+    st.markdown("## Parameter Uncertainty")
+    st.markdown("### Fisher Information Matrix")
+
+    st.latex(r"""
+    \mathcal{I}_{ij}
+    = -\mathbb{E}
+    \left[
+    \frac{\partial^2 \log \mathcal{L}}
+    {\partial \theta_i \partial \theta_j}
+    \right]
+    """)
+
+    st.markdown("Approximate covariance:")
+
+    st.latex(r"\mathrm{Cov}(\theta) \approx \mathcal{I}^{-1}")
+
+    st.markdown("---")
+    st.markdown("## Curvature Interpretation")
+    st.markdown("Near the maximum:")
+
+    st.latex(r"""
+    \log \mathcal{L}(\theta)
+    \approx
+    \log \mathcal{L}(\hat{\theta})
+    -
+    \frac{1}{2}
+    (\theta - \hat{\theta})^T
+    \mathcal{I}
+    (\theta - \hat{\theta})
+    """)
+
+    st.markdown("Contours of constant likelihood form **ellipses**.")
+
+    st.markdown("---")
+    st.markdown("## Reporting Results")
+    st.markdown("""
+    - Best-fit values  
+    - Confidence intervals  
+    - Correlations between parameters  
+    - Experimental sensitivity  
+    """)
+
+    st.markdown("---")
+    st.markdown("## Bayesian Interpretation")
+    st.markdown("Bayes theorem:")
+
+    st.latex(r"""
+    P(\theta \mid x)
+    =
+    \frac{P(x \mid \theta) P(\theta)}
+    {P(x)}
+    """)
+
+    st.markdown("""
+    Where:
+
+    - $P(\theta)$: prior  
+    - $P(x \mid \theta)$: likelihood  
+    - $P(\theta \mid x)$: posterior  
+    """)
+
+    st.markdown("### Gaussian Posterior")
+
+    st.latex(r"\text{Posterior is Gaussian}")
+
+    st.markdown("MLE ≡ MAP estimator for flat priors.")
+
+    st.markdown("---")
+    st.markdown("## Experimental Design")
+    st.markdown("### Goal")
+    st.markdown("Choose experiment settings $s$ to **maximize information gain**:")
+
+    st.latex(r"s^* = \arg\max_s \det \mathcal{I}(s)")
+
+    st.markdown("or equivalently minimize parameter uncertainty.")
+
+    st.markdown("---")
+    st.markdown("## Autonomous Experimentation Loop")
+    st.markdown("""
+    1. Measure  
+    2. Fit model  
+    3. Estimate uncertainty  
+    4. Choose next experiment  
+    5. Repeat  
+    """)
+
     # Footer
     st.markdown("---")
     st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
