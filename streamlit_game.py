@@ -631,32 +631,18 @@ def main():
     
     # Header info
     st.markdown("""
-    <div class="info-box">
-        <strong>Goal:</strong> Optimize your measurement strategy within 12 hours! 
-        Collect scans at different temperatures to maximize Fisher information. 
-        The Fisher score quantifies how well your measurements constrain the temperature-dependent linewidth parameters.
-    </div>
-    """, unsafe_allow_html=True)
+**Problem:** You are an experimentalist with 2 samples of the same crystal. In one sample, uniaxial pressure is applied. In the other, there is no pressure applied.
+                
+**Goal:** Your goal is to understand how the width of the lineshape changes with increasing temperature.
+                
+**Resources:** You have 12 hours and can control the experiment using the widgets on the left.
+                
+**Scoring:** You are scored based on the precision of the **slope** of the half-width at half max as a function of temperature (it is piecewise linear).
+""")
     
     # Sidebar for controls
     with st.sidebar:
         st.markdown("## 🎮 Experiment Controls")
-        
-        # # Game status
-        # time_ratio = st.session_state.used_time / TIME_BUDGET
-        
-        # st.markdown(f"""
-        # <div class="time-box">
-        #     <strong>Time Used:</strong> {format_time_delta(st.session_state.used_time)}<br>
-        #     <strong>Time Budget:</strong> {format_time_delta(TIME_BUDGET)}<br>
-        #     <strong>Remaining:</strong> {format_time_delta(max(0, TIME_BUDGET - st.session_state.used_time))}<br>
-        #     <strong>Progress:</strong> {min(100, time_ratio*100):.1f}%
-        # </div>
-        # """, unsafe_allow_html=True)
-        
-        # # Custom progress bar
-        # progress_html, display_ratio = create_custom_progress_bar(time_ratio)
-        # st.markdown(progress_html, unsafe_allow_html=True)
         total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
         remaining_time = TIME_BUDGET - st.session_state.used_time
 
@@ -790,19 +776,8 @@ def main():
     else:
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
     
-    # st.markdown("### 📝 Recent Scans")
-    # if len(st.session_state.all_scans) > 0:
-    #     # Show recent scans
-    #     recent_scans = st.session_state.all_scans.tail(5)
-    #     for _, scan in recent_scans.iterrows():
-    #         condition = "Pressurized" if scan['pressurized'] else "Non-Pressurized"
-    #         st.write(f"**{condition}** at T={scan['T']:.1f}K")
-    #         st.caption(f"Energy: {scan['Energy']:.2f} meV, Counts: {scan['counts']}")
-    # else:
-    #     st.write("No scans yet")
-    
     st.markdown("---")
-    st.markdown("### ℹ️ How to Play")
+    st.markdown("### How to Play")
     st.info("""
     1. Adjust scan parameters in the sidebar
     2. Run scans at different temperatures
@@ -812,49 +787,30 @@ def main():
     """)
     st.markdown('---')
     st.markdown('### Understanding the Game')
-    
-
-    st.markdown("## Introduction")
-
-    st.markdown("### Motivation")
+    st.markdown("#### Motivation")
     st.markdown("""
-    Modern neutron scattering experiments face increasing complexity:
+    To improve the quality of your experiment you could:
+                
+    - Increase count rates (count longer)
+    - Increase neutron flux (better source)
+    - Decrease background (more shielding) 
+    - **Choose measurement locations more carefully**
 
-    - Increasing count rates  
-    - Increasing neutron flux  
-    - Larger, higher-dimensional datasets  
-    - Limited beam time  
-    - Human-driven experiment design does not scale  
-
-    **Goal:** automate experiment design using physics-informed statistical models.
-    """)
-
-    st.markdown("---")
-    st.markdown("## Understanding an Experiment")
-    st.markdown("### What does a measurement mean?")
-    st.markdown("""
-    - A measurement is a **random variable**
-    - Experimental results must include **uncertainty**
-    - Question is not *what value*, but *how well do we know it?*
+    **Goal:** Understand what makes a "better" measurement.
+    Spoiler: The best measurements maximally constrain the physics parameters of interest
     """)
 
     st.markdown("---")
     st.markdown("## Statistical View of Experiments")
     st.markdown("### Measurement Model")
-    st.markdown("Let a measurement $x$ depend on parameters $\\theta$:")
+    st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
 
-    st.latex(r"x = f(\theta) + \epsilon")
+    st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
 
-    st.markdown("where noise $\\epsilon$ is stochastic.")
-
-    st.markdown("---")
-    st.markdown("### Common Noise Models")
-    st.markdown("#### Poisson (counting experiments)")
-
+    st.markdown("#### Refresher on Probability")
+    st.markdown('For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
     st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
-
-    st.markdown("#### Gaussian (high-count limit)")
-
+    st.markdown('A Gaussian random variable has the probability distribution function')
     st.latex(r"""
     P(x \mid \mu, \sigma) =
     \frac{1}{\sqrt{2\pi\sigma^2}}
