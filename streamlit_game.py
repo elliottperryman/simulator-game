@@ -432,28 +432,50 @@ def add_scan(pressurized=False):
     )
     
     
-    rows = []
-    for E, cps, e, l, c in zip(Es, counts_per_sec, errors.T, lam, counts):
-        rows.append({
-            'T': T,
-            'Energy': E,
-            'counts_per_sec': cps,
-            'error_l': e[0],
-            'error_h': e[1],
-            'lam': l,
-            'amp': amp,
-            'E0': E0,
-            'hwhm': float(hwhm),
-            'bg': bg,
-            'counts': c,
-            'count_time': count_time,
-            'pressurized': pressurized,
-        })
-    
-    st.session_state.all_scans = pd.concat(
-        [st.session_state.all_scans, pd.DataFrame(rows)],
-        ignore_index=True
+    new_df = pd.DataFrame({
+        'T': T,
+        'Energy': Es,
+        'counts_per_sec': counts_per_sec,
+        'error_l': errors.T[:, 0],
+        'error_h': errors.T[:, 1],
+        'lam': lam,
+        'amp': amp,
+        'E0': E0,
+        'hwhm': float(hwhm),
+        'bg': bg,
+        'counts': counts,
+        'count_time': count_time,
+        'pressurized': pressurized,
+    })
+
+    st.session_state.all_scans = (
+        new_df
+        if len(st.session_state.all_scans)==0
+        else pd.concat([st.session_state.all_scans, new_df], ignore_index=True)
     )
+
+    # rows = []
+    # for E, cps, e, l, c in zip(Es, counts_per_sec, errors.T, lam, counts):
+    #     rows.append({
+    #         'T': T,
+    #         'Energy': E,
+    #         'counts_per_sec': cps,
+    #         'error_l': e[0],
+    #         'error_h': e[1],
+    #         'lam': l,
+    #         'amp': amp,
+    #         'E0': E0,
+    #         'hwhm': float(hwhm),
+    #         'bg': bg,
+    #         'counts': c,
+    #         'count_time': count_time,
+    #         'pressurized': pressurized,
+    #     })
+    
+    # st.session_state.all_scans = pd.concat(
+    #     [st.session_state.all_scans, pd.DataFrame(rows)],
+    #     ignore_index=True
+    # )
     if end_with_game_over:
         trigger_game_over()
     # st.rerun()
@@ -851,7 +873,7 @@ def main():
 
     st.markdown("## Parameter Uncertainty")
 
-    st.markdown('One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
+    st.markdown(r'One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
     st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
     st.latex(r"""
     \mathcal{I}_{ij}
