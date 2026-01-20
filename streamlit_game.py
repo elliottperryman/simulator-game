@@ -816,7 +816,7 @@ def main():
     st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
 
     st.markdown("#### Refresher on Probability")
-    st.markdown('For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
+    st.markdown(r'For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
     st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
     st.markdown('A Gaussian random variable has the probability distribution function')
     st.latex(r"""
@@ -852,7 +852,7 @@ def main():
     st.markdown("## Parameter Uncertainty")
 
     st.markdown('One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
-    st.markdown('This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
+    st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
     st.latex(r"""
     \mathcal{I}_{ij}
     = -\mathbb{E}
@@ -889,7 +889,7 @@ def main():
     {P(x)}
     """)
 
-    st.markdown("""
+    st.markdown(r"""
     Where:
 
     - $P(\theta)$: prior  
