@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from scipy.stats import poisson
 import pandas as pd
 import matplotlib as mpl
-from functools import wraps
+import matplotlib.gridspec 
 
 # ============================================================
 # Streamlit Configuration
@@ -510,7 +510,14 @@ def create_plots():
         'grid.color': '#374151',
     })
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(6, 12))
+    fig = plt.figure(figsize=(10, 6))
+    gs2 = matplotlib.gridspec.GridSpec(2, 2, height_ratios=[1, 1], figure=fig)
+    ax1 = plt.subplot(gs2[0, 0])
+    ax2 = plt.subplot(gs2[0, 1])
+    # gs2.update(hspace=0.3, wspace=0.3)
+    ax3 = plt.subplot(gs2[1, :])
+    fig = plt.gcf()
+
     fig.suptitle('Neutron Scattering Experiment Simulator', fontsize=16, fontweight='bold')
     
     # Colormaps
@@ -518,7 +525,7 @@ def create_plots():
     cmap_pressurized = plt.get_cmap('Wistia')
     
     # Plot non-pressurized data
-    ax1.set_title("Non-Pressurized Energy Scans", fontsize=11, fontweight='bold')
+    ax1.set_title("Non-Pressurized Sample", fontsize=11, fontweight='bold')
     ax1.set_xlabel("Energy [meV]", fontsize=9)
     ax1.set_ylabel("Counts per Second", fontsize=9)
     ax1.grid(True, alpha=0.3)
@@ -543,7 +550,7 @@ def create_plots():
             ax1.legend(loc='upper right', framealpha=0.9, fontsize=8)
     
     # Plot pressurized data
-    ax2.set_title("Pressurized Energy Scans", fontsize=11, fontweight='bold')
+    ax2.set_title("Pressurized Sample", fontsize=11, fontweight='bold')
     ax2.set_xlabel("Energy [meV]", fontsize=9)
     ax2.set_ylabel("Counts per Second", fontsize=9)
     ax2.grid(True, alpha=0.3)
@@ -637,10 +644,22 @@ def main():
                 
 **Resources:** You have 12 hours and can control the experiment using the widgets on the left.
                 
-**Scoring:** You are scored based on the precision of the **slope** of the half-width at half max as a function of temperature (it is piecewise linear).
+**Scoring:** You are scored based on the precision of the parameters fit.
+
 """)
-    
+    st.info('**Note:** The score is based on the precision of the **slope** of the half-width at half max as a function of temperature. '
+    ' This is a piecewise linear model, so energy scans at different temperatures are useful. Also, all parameters are treated' \
+    'as already fit, which is not realistic (but keeps the game able to be computed quickly)')    
     # Sidebar for controls
+    st.markdown("---")
+    st.markdown("### How to Play")
+    st.info("""
+    1. Adjust scan parameters in the sidebar
+    2. Run scans at different temperatures
+    3. Balance between pressurized and non-pressurized conditions
+    4. Maximize your Fisher score within 12 hours
+    5. Try to cover a wide temperature range!
+    """)
     with st.sidebar:
         st.markdown("## 🎮 Experiment Controls")
         total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
@@ -661,10 +680,10 @@ def main():
 
         if st.session_state.game_over:
             st.error("⏰ Game Over! Time budget exhausted!")
-        if st.button("🔄 Restart Game"):
+        if st.button("Restart Game"):
             clear_plots()
         
-        if st.button("🔄 Toggle Theory Lines", 
+        if st.button("Theory Lines On/Off", 
                 help="Show/hide theoretical prediction lines"):
             st.session_state.show_theory = not st.session_state.show_theory
             st.rerun()
@@ -727,7 +746,17 @@ def main():
         
         st.markdown("---")
                 
-        # Fisher scores
+
+    # Main content area
+    # Create and display plots
+    fig = create_plots()
+    st.pyplot(fig)
+    
+    # Data summary
+    st.markdown("### Data Summary")
+    if len(st.session_state.all_scans) > 0:
+
+                # Fisher scores
         non_score, press_score, total_score = compute_fisher_scores()
         
         def format_score(score):
@@ -737,37 +766,24 @@ def main():
                 return f"{score:.2f}"
         
         st.markdown("### Fisher Information Scores")
-        st.markdown(f"""
-        <div class="score-box">
-            <strong>Non-Pressurized Score:</strong> {format_score(non_score)}
-        </div>
-        <div class="score-box">
-            <strong>Pressurized Score:</strong> {format_score(press_score)}
-        </div>
-        <div class="score-box">
-            <strong>Total Score:</strong> {format_score(total_score)}
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'##### Total Score: {format_score(total_score)}')
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f'Non-Pressurized Score: {format_score(non_score)}')
+        with col2:
+            st.markdown(f'Pressurized Score: {format_score(press_score)}')
         
-        st.caption("Higher score = Better measurement precision")
-        st.caption("Score = -∞ when measurement is insufficient")
+        st.caption("Higher score = Better measurement precision & Score = -∞ when measurement is insufficient")
     
-    # Main content area
-    # Create and display plots
-    fig = create_plots()
-    st.pyplot(fig)
-    
-    # Data summary
-    st.markdown("### Data Summary")
-    if len(st.session_state.all_scans) > 0:
+
         summary_data = {
-            "Total Scans": len(st.session_state.all_scans),
+            "Total # of Measurements": len(st.session_state.all_scans),
             "Non-Pressurized Measurements": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
             "Pressurized Measurements": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
             "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
             "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
             "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
-            "Time Used Percentage": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
+            "Time Used": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
         }
         
         cols = st.columns(3)
@@ -776,15 +792,7 @@ def main():
     else:
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
     
-    st.markdown("---")
-    st.markdown("### How to Play")
-    st.info("""
-    1. Adjust scan parameters in the sidebar
-    2. Run scans at different temperatures
-    3. Balance between pressurized and non-pressurized conditions
-    4. Maximize your Fisher score within 12 hours
-    5. Try to cover a wide temperature range!
-    """)
+
     st.markdown('---')
     st.markdown('### Understanding the Game')
     st.markdown("#### Motivation")
@@ -816,27 +824,19 @@ def main():
     \frac{1}{\sqrt{2\pi\sigma^2}}
     \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
     """)
-
-    st.markdown("---")
-    st.markdown("## Likelihood Functions")
-    st.markdown("Given data $\\{x_i\\}$ and parameters $\\theta$:")
+    st.markdown("Given multiple independent data $\\{x_i\\}$ and parameters $\\theta$ the likelihood of observing some data given the parameters $\theta$ is:")
 
     st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
 
-    st.markdown("Log-likelihood:")
+    st.markdown("We deal with the log likelihood:")
 
     st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
 
-    st.markdown("---")
-    st.markdown("## Maximum Likelihood Estimation (MLE)")
-    st.markdown("Estimate parameters by maximizing likelihood:")
+    st.markdown("We estimate parameters by maximizing likelihood:")
 
     st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
 
-    st.markdown("---")
-    st.markdown("### Gaussian Special Case")
     st.markdown("For Gaussian noise with variance $\\sigma^2$:")
-
     st.latex(r"""
     \log \mathcal{L}
     = -\frac{1}{2}
@@ -847,12 +847,12 @@ def main():
     \right]
     """)
 
-    st.markdown("Equivalent to **least-squares minimization**.")
+    st.info("This is equivalent to **least-squares minimization**.")
 
-    st.markdown("---")
     st.markdown("## Parameter Uncertainty")
-    st.markdown("### Fisher Information Matrix")
 
+    st.markdown('One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
+    st.markdown('This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
     st.latex(r"""
     \mathcal{I}_{ij}
     = -\mathbb{E}
@@ -861,13 +861,9 @@ def main():
     {\partial \theta_i \partial \theta_j}
     \right]
     """)
+    st.markdown('The Fisher information matrix inverse gives the covariance')
+    st.latex(r"\Sigma(\theta) = \mathcal{I}^{-1}")
 
-    st.markdown("Approximate covariance:")
-
-    st.latex(r"\mathrm{Cov}(\theta) \approx \mathcal{I}^{-1}")
-
-    st.markdown("---")
-    st.markdown("## Curvature Interpretation")
     st.markdown("Near the maximum:")
 
     st.latex(r"""
@@ -883,18 +879,8 @@ def main():
 
     st.markdown("Contours of constant likelihood form **ellipses**.")
 
-    st.markdown("---")
-    st.markdown("## Reporting Results")
-    st.markdown("""
-    - Best-fit values  
-    - Confidence intervals  
-    - Correlations between parameters  
-    - Experimental sensitivity  
-    """)
-
-    st.markdown("---")
     st.markdown("## Bayesian Interpretation")
-    st.markdown("Bayes theorem:")
+    st.markdown("Bayes theorem tells us that:")
 
     st.latex(r"""
     P(\theta \mid x)
@@ -911,11 +897,13 @@ def main():
     - $P(\theta \mid x)$: posterior  
     """)
 
-    st.markdown("### Gaussian Posterior")
-
-    st.latex(r"\text{Posterior is Gaussian}")
-
-    st.markdown("MLE ≡ MAP estimator for flat priors.")
+    st.markdown("""
+Bayesians believe:
+    * The posterior is the quantity of interest
+    * Point estimates bad - distribution good
+        - as an example, rather than say "Sun most likely," say "75% chance of sun, 20% chance rain, and 5% chance of hurricane."
+""")
+    st.info("Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
 
     st.markdown("---")
     st.markdown("## Experimental Design")
@@ -924,7 +912,7 @@ def main():
 
     st.latex(r"s^* = \arg\max_s \det \mathcal{I}(s)")
 
-    st.markdown("or equivalently minimize parameter uncertainty.")
+    st.markdown("equivalent to minimizing parameter uncertainty.")
 
     st.markdown("---")
     st.markdown("## Autonomous Experimentation Loop")
