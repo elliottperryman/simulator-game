@@ -926,7 +926,7 @@ Bayesians believe:
     * Point estimates bad - distribution good
         - as an example, rather than say "Sun most likely," say "75% chance of sun, 20% chance rain, and 5% chance of hurricane."
 """)
-    st.info("Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
+    st.info(r"Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
 
     st.markdown("---")
     st.markdown("## Experimental Design")
