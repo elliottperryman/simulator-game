@@ -746,7 +746,7 @@ def main():
             min_value=1.0,
             max_value=8.0,
             key='er_slider',
-            step=0.1,
+            step=0.5,
             help="Total energy range centered on scan center"
         )
         
@@ -755,7 +755,7 @@ def main():
             min_value=0.1,
             max_value=20.0,
             key='sc_slider',
-            step=0.1,
+            step=0.5,
             help="Center energy for the scan"
         )
         
