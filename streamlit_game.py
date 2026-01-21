@@ -722,7 +722,16 @@ def main():
             step=1.0,
             help="Center temperature for the scan"
         )
-        
+        # temp = st.number_input(
+        #     "Temperature [K]",
+        #     min_value=2.0,
+        #     max_value=270.0,
+        #     value=100.0,  # default value
+        #     step=1.0,
+        #     format="%.1f",  # Format to 1 decimal place
+        #     help="Center temperature for the scan"
+        # )
+                
         st.slider(
             "Counting Time per Point [s]",
             min_value=1.0,
