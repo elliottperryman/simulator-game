@@ -454,31 +454,8 @@ def add_scan(pressurized=False):
         else pd.concat([st.session_state.all_scans, new_df], ignore_index=True)
     )
 
-    # rows = []
-    # for E, cps, e, l, c in zip(Es, counts_per_sec, errors.T, lam, counts):
-    #     rows.append({
-    #         'T': T,
-    #         'Energy': E,
-    #         'counts_per_sec': cps,
-    #         'error_l': e[0],
-    #         'error_h': e[1],
-    #         'lam': l,
-    #         'amp': amp,
-    #         'E0': E0,
-    #         'hwhm': float(hwhm),
-    #         'bg': bg,
-    #         'counts': c,
-    #         'count_time': count_time,
-    #         'pressurized': pressurized,
-    #     })
-    
-    # st.session_state.all_scans = pd.concat(
-    #     [st.session_state.all_scans, pd.DataFrame(rows)],
-    #     ignore_index=True
-    # )
     if end_with_game_over:
         trigger_game_over()
-    # st.rerun()
 
 def clear_plots():
     """Clear all data and reset the game"""
@@ -683,7 +660,7 @@ def main():
     5. Try to cover a wide temperature range!
     """)
     with st.sidebar:
-        st.markdown("## 🎮 Experiment Controls")
+        st.markdown("## Experiment Controls")
         total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
         remaining_time = TIME_BUDGET - st.session_state.used_time
 
@@ -721,17 +698,7 @@ def main():
             key='temp_slider',
             step=1.0,
             help="Center temperature for the scan"
-        )
-        # temp = st.number_input(
-        #     "Temperature [K]",
-        #     min_value=2.0,
-        #     max_value=270.0,
-        #     value=100.0,  # default value
-        #     step=1.0,
-        #     format="%.1f",  # Format to 1 decimal place
-        #     help="Center temperature for the scan"
-        # )
-                
+        ) 
         st.slider(
             "Counting Time per Point [s]",
             min_value=1.0,
@@ -824,141 +791,415 @@ def main():
         st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
     
 
+    # ============================================================
+    # Pedagogical Section
+    # ============================================================
+
     st.markdown('---')
-    st.markdown('## vvvvv ----- Work in Progress ----- vvvvvvv')
-    st.markdown('### Understanding the Game')
-    st.markdown("#### Motivation")
-    st.markdown("""
-    To improve the quality of your experiment you could:
+    st.markdown('## Understanding the Game')
+
+    with st.expander('### The Physics Experiment'):
+        st.markdown("""
+    **What are you measuring?**
+    You're studying a crystal using **neutron scattering**. When neutrons hit the crystal, they interact with atomic vibrations called **phonons**.
+
+    **What's a damped harmonic oscillator?**
+    This mathematical model describes how phonons behave:
+    - **Oscillator**: Atoms vibrate back and forth
+    - **Damped**: Vibrations slowly die out over time
+    - **In scattering**: Shows up as a peak in your measurement
+
+    **What does HWHM mean?**
+    - **Half-Width at Half-Maximum** = Width of peak at half its maximum height
+    - **Physical meaning**: Related to how long phonons last before scattering
+    - **Temperature dependence**: As temperature increases, peaks usually broaden (phonons scatter more)
+
+    **Why pressure?**
+    Applying pressure changes the crystal structure, which affects how phonons behave. Comparing pressurized vs. non-pressurized tells us about material properties.
+    """)
+
+    with st.expander('### Experimental Trade-offs'):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+    **Time Management:**
+    - Each measurement costs time
+    - 12 hours total = limited resource
+    - Need to choose: few precise measurements OR many quick ones
+
+    **Counting Statistics:**
+    - Longer count time → smaller error bars
+    - But fewer total measurements
+    - Poisson statistics: Error ≈ √(counts)
+
+    **Temperature Coverage:**
+    - Need measurements at different temperatures to see trends
+    - But each temperature scan takes time
+    - Critical temperatures: 50K, 150K (transition points)
+    """)
+        
+        with col2:
+            st.markdown("""
+    **Energy Range Choices:**
+    - Wide range: See full peak shape + background
+    - Narrow range: Focus on peak region, less background
+    - Center position: Must include the actual peak!
+
+    **Points vs. Time:**
+    - More points: Better energy resolution
+    - But each point takes counting time
+    - Fewer points: Quicker scans, but might miss details
+
+    **Balance Strategy:**
+    1. Quick scans to find peaks
+    2. Medium scans to map temperature dependence
+    3. Long scans at key temperatures for precision
+    """)
+
+    with st.expander('### Measurement Statistics 101'):
+        st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
+
+        st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
+
+        st.markdown(r'For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
+        st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
+        st.markdown('A Gaussian random variable has the probability distribution function')
+        st.latex(r"""
+        P(x \mid \mu, \sigma) =
+        \frac{1}{\sqrt{2\pi\sigma^2}}
+        \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
+        """)
+        st.markdown("Given multiple independent data $\\{x_i\\}$ and parameters $\\theta$ the likelihood of observing some data given the parameters $\theta$ is:")
+
+        st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
+
+        st.markdown("We deal with the log likelihood:")
+
+        st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
+
+        st.markdown("We estimate parameters by maximizing likelihood:")
+
+        st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
+
+        st.markdown("For Gaussian noise with variance $\\sigma^2$:")
+        st.latex(r"""
+        \log \mathcal{L}
+        = -\frac{1}{2}
+        \sum_i
+        \left[
+        \frac{(x_i - f_i(\theta))^2}{\sigma^2}
+        + \log(2\pi\sigma^2)
+        \right]
+        """)
+
+        st.info("This is equivalent to **least-squares minimization**.")
+        st.markdown("#### Parameter Uncertainty")
+
+        st.markdown(r'One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
+        st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
+        st.latex(r"""
+        \mathcal{I}_{ij}
+        = -\mathbb{E}
+        \left[
+        \frac{\partial^2 \log \mathcal{L}}
+        {\partial \theta_i \partial \theta_j}
+        \right]
+        """)
+        st.markdown('The Fisher information matrix inverse gives the covariance')
+        st.latex(r"\Sigma(\theta) = \mathcal{I}^{-1}")
+
+        st.markdown("Near the maximum:")
+
+        st.latex(r"""
+        \log \mathcal{L}(\theta)
+        \approx
+        \log \mathcal{L}(\hat{\theta})
+        -
+        \frac{1}{2}
+        (\theta - \hat{\theta})^T
+        \mathcal{I}
+        (\theta - \hat{\theta})
+        """)
+
+        st.markdown("Contours of constant likelihood form **ellipses**.")
+
+    with st.expander('### Fisher Information Score Explained'):
+        st.markdown("""
+    **What is Fisher Information?**
+    A mathematical measure of how much your measurements tell you about the parameters you care about (the slopes of HWHM vs temperature).
+
+    **How is it calculated?**
+    For each measurement point, we compute:
+
+    $$\\text{Fisher contribution} = \\frac{\\text{count time}}{\\text{count rate}} \\times \\left(\\frac{\\partial\\text{count rate}}{\\partial\\text{parameter}}\\right)^2$$
+
+    Then we sum over all measurements.
+
+    **What does your score mean?**
+    - **Higher score** = Better precision in your parameter estimates
+    - **Negative infinity (-∞)** = Not enough data to determine all parameters
+    - **Separate scores** for pressurized vs. non-pressurized samples
+
+    **How to improve your score:**
+    1. Measure where the signal changes most with temperature (near transition points)
+    2. Get good statistics at key temperatures
+    3. Measure both pressurized and non-pressurized
+    4. Cover the full temperature range (2K to 270K)
+    """)
+        
+
+    with st.expander('### Bayesian vs Frequentist Thinking'):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+    **Frequentist Approach (What this game uses):**
+    - Parameters have fixed true values
+    - Uncertainty comes from measurement randomness
+    - "95% confidence interval": If we repeated experiment 100 times, 95 intervals would contain true value
+    - Uses Fisher Information to quantify precision
+    """)
+        
+        with col2:
+            st.markdown("""
+    **Bayesian Approach (Alternative view):**
+    - Parameters have probability distributions
+    - Start with prior belief, update with data
+    - "95% credible interval": 95% probability true value is in interval
+    - Incorporates prior knowledge explicitly
+
+    **Connection:**
+    With little data: Frequentist and Bayesian can differ
+    With lots of data: They must agree
+    """)
+
+    with st.expander('### Optimal Experimental Design'):
+        st.markdown("""
+    **The Big Idea:**
+    Instead of measuring randomly, choose measurements that give you the most information!
+
+    **Information-Rich Measurements:**
+    1. **Where model is sensitive**: Measure where count rate changes a lot when parameters change
+    2. **Where uncertainty is high**: Focus on regions with currently poor constraints
+    3. **Where it matters most**: For HWHM, measure near the peak edges
+
+    **Real-World Analogy:**
+    Imagine trying to map a mountain:
+    - **Bad strategy**: Measure everywhere equally
+    - **Good strategy**: Focus on the slopes (where elevation changes)
+    - **Best strategy**: Measure slopes AND connect different sides
+
+    **In This Game:**
+    The Fisher score tells you how well you're doing. Try different strategies:
+    - Many temperatures with few points?
+    - Few temperatures with many points?
+    - Mix of both?
+    """)
+
+    with st.expander('### Practical Tips for Success'):
+        st.markdown("""
+    **Getting Started:**
+    1. **Quick reconnaissance**: Do fast scans at 50K, 150K, 250K for both samples
+    2. **Find the peaks**: Adjust energy center to capture the peak
+    3. **Check theory lines**: Use them as guides (toggle on/off with button)
+
+    **Intermediate Strategy:**
+    4. **Identify key regions**: Where does HWHM change most? Focus there!
+    5. **Balance samples**: Don't neglect one sample type
+    6. **Watch transition points**: 50K and 150K are important
+
+    **Advanced Optimization:**
+    7. **Check Fisher score often**: Are you making progress?
+    8. **Adjust based on results**: If score is -∞, need more data
+    9. **Time management**: Leave buffer at the end for final precision scans
+
+    **Common Pitfalls:**
+    - ⚠️ **Too few temperatures**: Can't see temperature dependence
+    - ⚠️ **Too many points per scan**: Wastes time, fewer temperatures
+    - ⚠️ **Wrong energy range**: Missing the peak entirely
+    - ⚠️ **Ignoring one sample**: Incomplete comparison
+    """)
+
+    with st.expander('### Real-World Applications'):
+        st.markdown("""
+    **Why This Matters in Real Science:**
+
+    **1. Neutron Scattering Facilities:**
+    - Cost millions to build and operate
+    - Beam time is precious (hours cost thousands of dollars)
+    - Researchers compete for limited time slots
+
+    **2. Materials Discovery:**
+    - High-temperature superconductors
+    - Thermoelectric materials
+    - Battery materials
+    - Quantum materials
+
+    **3. Broader Applications:**
+    - **Pharmaceuticals**: Drug crystal structure analysis
+    - **Engineering**: Stress analysis in materials
+    - **Energy**: Fuel cell and battery research
+    - **Quantum computing**: Material characterization
+
+    **Your Role as Experimentalist:**
+    Even with automation, humans need to:
+    - Set scientific goals
+    - Interpret results
+    - Make strategic decisions
+    - Understand the underlying physics
+    """)
+
+    st.markdown("---")
+    st.info("""
+    **Quick Reference:**
+    - **Goal**: Maximize Fisher score within 12 hours
+    - **Key temperatures**: 50K and 150K (transition points)
+    - **Both samples**: Pressurized AND non-pressurized
+    - **Watch time**: Each scan costs time!
+    - **Use theory lines**: They guide you to the right energy range
+    """)
+
+
+
+    # st.markdown('---')
+    # st.markdown('### Understanding the Game')
+    # st.markdown("#### Motivation")
+    # st.markdown("""
+    # To improve the quality of your experiment you could:
                 
-    - Increase count rates (count longer)
-    - Increase neutron flux (better source)
-    - Decrease background (more shielding) 
-    - **Choose measurement locations more carefully**
+    # - Increase count rates (count longer)
+    # - Increase neutron flux (better source)
+    # - Decrease background (more shielding) 
+    # - **Choose measurement locations more carefully**
 
-    **Goal:** Understand what makes a "better" measurement.
-    Spoiler: The best measurements maximally constrain the physics parameters of interest
-    """)
+    # **Goal:** Understand what makes a "better" measurement.
+    # Spoiler: The best measurements maximally constrain the physics parameters of interest
+    # """)
 
-    st.markdown("---")
-    st.markdown("## Statistical View of Experiments")
-    st.markdown("### Measurement Model")
-    st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
+    # st.markdown("---")
+    # with st.expander('Maximum Likelihood Estimation'):
 
-    st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
+    #     st.markdown("## Statistical View of Experiments")
+    #     st.markdown("### Measurement Model")
+    #     st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
 
-    st.markdown("#### Refresher on Probability")
-    st.markdown(r'For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
-    st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
-    st.markdown('A Gaussian random variable has the probability distribution function')
-    st.latex(r"""
-    P(x \mid \mu, \sigma) =
-    \frac{1}{\sqrt{2\pi\sigma^2}}
-    \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
-    """)
-    st.markdown("Given multiple independent data $\\{x_i\\}$ and parameters $\\theta$ the likelihood of observing some data given the parameters $\theta$ is:")
+    #     st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
 
-    st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
+    #     st.markdown("#### Refresher on Probability")
+    #     st.markdown(r'For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
+    #     st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
+    #     st.markdown('A Gaussian random variable has the probability distribution function')
+    #     st.latex(r"""
+    #     P(x \mid \mu, \sigma) =
+    #     \frac{1}{\sqrt{2\pi\sigma^2}}
+    #     \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
+    #     """)
+    #     st.markdown("Given multiple independent data $\\{x_i\\}$ and parameters $\\theta$ the likelihood of observing some data given the parameters $\theta$ is:")
 
-    st.markdown("We deal with the log likelihood:")
+    #     st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
 
-    st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
+    #     st.markdown("We deal with the log likelihood:")
 
-    st.markdown("We estimate parameters by maximizing likelihood:")
+    #     st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
 
-    st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
+    #     st.markdown("We estimate parameters by maximizing likelihood:")
 
-    st.markdown("For Gaussian noise with variance $\\sigma^2$:")
-    st.latex(r"""
-    \log \mathcal{L}
-    = -\frac{1}{2}
-    \sum_i
-    \left[
-    \frac{(x_i - f_i(\theta))^2}{\sigma^2}
-    + \log(2\pi\sigma^2)
-    \right]
-    """)
+    #     st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
 
-    st.info("This is equivalent to **least-squares minimization**.")
+    #     st.markdown("For Gaussian noise with variance $\\sigma^2$:")
+    #     st.latex(r"""
+    #     \log \mathcal{L}
+    #     = -\frac{1}{2}
+    #     \sum_i
+    #     \left[
+    #     \frac{(x_i - f_i(\theta))^2}{\sigma^2}
+    #     + \log(2\pi\sigma^2)
+    #     \right]
+    #     """)
 
-    st.markdown("## Parameter Uncertainty")
+    #     st.info("This is equivalent to **least-squares minimization**.")
+    # with st.expander('Parameter Uncertainty'):
+    #     st.markdown("## Parameter Uncertainty")
 
-    st.markdown(r'One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
-    st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
-    st.latex(r"""
-    \mathcal{I}_{ij}
-    = -\mathbb{E}
-    \left[
-    \frac{\partial^2 \log \mathcal{L}}
-    {\partial \theta_i \partial \theta_j}
-    \right]
-    """)
-    st.markdown('The Fisher information matrix inverse gives the covariance')
-    st.latex(r"\Sigma(\theta) = \mathcal{I}^{-1}")
+    #     st.markdown(r'One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
+    #     st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
+    #     st.latex(r"""
+    #     \mathcal{I}_{ij}
+    #     = -\mathbb{E}
+    #     \left[
+    #     \frac{\partial^2 \log \mathcal{L}}
+    #     {\partial \theta_i \partial \theta_j}
+    #     \right]
+    #     """)
+    #     st.markdown('The Fisher information matrix inverse gives the covariance')
+    #     st.latex(r"\Sigma(\theta) = \mathcal{I}^{-1}")
 
-    st.markdown("Near the maximum:")
+    #     st.markdown("Near the maximum:")
 
-    st.latex(r"""
-    \log \mathcal{L}(\theta)
-    \approx
-    \log \mathcal{L}(\hat{\theta})
-    -
-    \frac{1}{2}
-    (\theta - \hat{\theta})^T
-    \mathcal{I}
-    (\theta - \hat{\theta})
-    """)
+    #     st.latex(r"""
+    #     \log \mathcal{L}(\theta)
+    #     \approx
+    #     \log \mathcal{L}(\hat{\theta})
+    #     -
+    #     \frac{1}{2}
+    #     (\theta - \hat{\theta})^T
+    #     \mathcal{I}
+    #     (\theta - \hat{\theta})
+    #     """)
 
-    st.markdown("Contours of constant likelihood form **ellipses**.")
+    #     st.markdown("Contours of constant likelihood form **ellipses**.")
 
-    st.markdown("## Bayesian Interpretation")
-    st.markdown("Bayes theorem tells us that:")
+    # with st.expander('Bayesian Stats'):
+    #     st.markdown("## Bayesian Interpretation")
+    #     st.markdown("Bayes theorem tells us that:")
 
-    st.latex(r"""
-    P(\theta \mid x)
-    =
-    \frac{P(x \mid \theta) P(\theta)}
-    {P(x)}
-    """)
+    #     st.latex(r"""
+    #     P(\theta \mid x)
+    #     =
+    #     \frac{P(x \mid \theta) P(\theta)}
+    #     {P(x)}
+    #     """)
 
-    st.markdown(r"""
-    Where:
+    #     st.markdown(r"""
+    #     Where:
 
-    - $P(\theta)$: prior  
-    - $P(x \mid \theta)$: likelihood  
-    - $P(\theta \mid x)$: posterior  
-    """)
+    #     - $P(\theta)$: prior  
+    #     - $P(x \mid \theta)$: likelihood  
+    #     - $P(\theta \mid x)$: posterior  
+    #     """)
 
-    st.markdown("""
-Bayesians believe:
-    * The posterior is the quantity of interest
-    * Point estimates bad - distribution good
-        - as an example, rather than say "Sun most likely," say "75% chance of sun, 20% chance rain, and 5% chance of hurricane."
-""")
-    st.info(r"Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
+    #     st.markdown("""
+    # Bayesians believe:
+    #     * The posterior is the quantity of interest
+    #     * Point estimates bad - distribution good
+    #         - as an example, rather than say "Sun most likely," say "75% chance of sun, 20% chance rain, and 5% chance of hurricane."
+    # """)
+    #     st.info(r"Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
 
-    st.markdown("---")
-    st.markdown("## Experimental Design")
-    st.markdown("### Goal")
-    st.markdown("Choose experiment settings $s$ to **maximize information gain**:")
 
-    st.latex(r"s^* = \arg\max_s \det \mathcal{I}(s)")
+    # st.markdown("---")
+    # st.markdown("## Experimental Design")
+    # st.markdown("### Goal")
+    # st.markdown("Choose experiment settings $s$ to **maximize information gain**:")
 
-    st.markdown("equivalent to minimizing parameter uncertainty.")
+    # st.latex(r"s^* = \arg\max_s \det \mathcal{I}(s)")
 
-    st.markdown("---")
-    st.markdown("## Autonomous Experimentation Loop")
-    st.markdown("""
-    1. Measure  
-    2. Fit model  
-    3. Estimate uncertainty  
-    4. Choose next experiment  
-    5. Repeat  
-    """)
+    # st.markdown("equivalent to minimizing parameter uncertainty.")
 
-    # Footer
-    st.markdown("---")
-    st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
+    # st.markdown("---")
+    # st.markdown("## Autonomous Experimentation Loop")
+    # st.markdown("""
+    # 1. Measure  
+    # 2. Fit model  
+    # 3. Estimate uncertainty  
+    # 4. Choose next experiment  
+    # 5. Repeat  
+    # """)
+
+    # # Footer
+    # st.markdown("---")
+    # st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
 
 # ============================================================
 # Run the app
