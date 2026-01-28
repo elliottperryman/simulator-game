@@ -952,7 +952,7 @@ def main():
         # Display Full Fisher Information Matrix
         with st.expander('Matrix Visualization'):
             if FI_full is not None:
-                tab1, tab2, tab3 = st.tabs(["Full Matrix", "Matrix Statistics", "Schur Complement"])
+                tab1, tab2, tab3 = st.tabs(["Fisher Matrix", "Covariance Matrix", "Schur Complement"])
                 
                 with tab1:
                     # Create a more readable display
@@ -1014,49 +1014,47 @@ def main():
                 
                 with tab2:
                     # with col2:
-                    st.markdown("#### Parameter Information Ranking")
-                    
+                    st.markdown("#### Covariance Matrix")
                     # Rank parameters by their diagonal values (individual information)
-                    diag_values = np.diag(FI_full)
-                    sorted_indices = np.argsort(diag_values)[::-1]  # Descending
-                    
-                    ranking_data = []
-                    for idx in sorted_indices[:5]:  # Top 5
-                        ranking_data.append({
-                            "Rank": len(ranking_data) + 1,
-                            "Parameter": param_names_full[idx],
-                            "Information": f"{diag_values[idx]:.2e}"
-                        })
-                    
-                    st.table(pd.DataFrame(ranking_data))
-                    
-                    st.markdown("#### Strongest Correlations")
                     
                     # Compute correlations from covariance matrix
                     try:
-                        covariance = np.linalg.inv(FI_full + np.eye(10) * 1e-10)
-                        correlations = np.zeros_like(covariance)
+                        covariance = np.linalg.pinv(FI_full + np.eye(10) * 1e-10)
+                             # Create a more readable display
+                        fig, ax = plt.subplots(figsize=(8, 6))
+                        
+                        # Use shorter names for display
+                        short_names = [
+                            "Amp(2K)", "E0(2K)", "BG(2K)", "HWHM(2K)",
+                            "P Slope1", "P Slope2", "P Slope3",
+                            "NP Slope1", "NP Slope2", "NP Slope3"
+                        ]
+                        
+                        # Normalize for better visualization
+                        
+                        im = ax.imshow(covariance, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
+                        
+                        # Set labels
+                        ax.set_xticks(range(10))
+                        ax.set_yticks(range(10))
+                        ax.set_xticklabels(short_names, rotation=45, ha='right')
+                        ax.set_yticklabels(short_names)
+                        ax.set_title("Covariance Matrix")
+                        
+                        # Add colorbar
+                        plt.colorbar(im, ax=ax, label='Covariane')
+                        
+                        # Add text annotations for matrix values (only significant ones)
+                        threshold = 0.1  # Only show values above 10% of max
                         for i in range(10):
-                            for j in range(10):
-                                correlations[i, j] = covariance[i, j] / np.sqrt(covariance[i, i] * covariance[j, j])
+                            for j in range(i+1):
+                                text = ax.text(j, i, f'{covariance[i, j]:.1e}',
+                                            ha="center", va="center", 
+                                            color="black",
+                                            fontsize=7)
                         
-                        # Find strongest correlations (excluding diagonal)
-                        corr_pairs = []
-                        for i in range(10):
-                            for j in range(i+1, 10):
-                                corr_pairs.append((i, j, correlations[i, j]))
-                        
-                        corr_pairs.sort(key=lambda x: abs(x[2]), reverse=True)
-                        
-                        correlation_data = []
-                        for i, j, corr in corr_pairs[:3]:
-                            correlation_data.append({
-                                "Parameter 1": short_names[i],
-                                "Parameter 2": short_names[j],
-                                "Correlation": f"{corr:.3f}"
-                            })
-                        
-                        st.table(pd.DataFrame(correlation_data))
+                        plt.tight_layout()
+                        st.pyplot(fig)
                         
                     except np.linalg.LinAlgError:
                         st.warning("Cannot compute correlations - matrix is singular")
@@ -1145,25 +1143,110 @@ def main():
     st.markdown('---')
     st.markdown('## Understanding the Game')
 
-    with st.expander('### The Physics Experiment'):
-        st.markdown("""
-    **What are you measuring?**
-    You're studying a crystal using **neutron scattering**. When neutrons hit the crystal, they interact with atomic vibrations called **phonons**.
+    with st.expander("### The Physics Experiment"):
+        st.markdown("#### Neutron Scattering Model")
 
-    **What's a damped harmonic oscillator?**
-    This mathematical model describes how phonons behave:
-    - **Oscillator**: Atoms vibrate back and forth
-    - **Damped**: Vibrations slowly die out over time
-    - **In scattering**: Shows up as a peak in your measurement
+        st.latex(r"""
+        I(E, T) = S(E, T) + B(T)
+        """)
 
-    **What does HWHM mean?**
-    - **Half-Width at Half-Maximum** = Width of peak at half its maximum height
-    - **Physical meaning**: Related to how long phonons last before scattering
-    - **Temperature dependence**: As temperature increases, peaks usually broaden (phonons scatter more)
+        st.markdown("The scattering function is modeled as a damped harmonic oscillator:")
+        st.latex(r"""
+        S(E, T)
+        =
+        \left|
+        \frac{A(T)}{\pi E_0(T)}
+        \left[
+        \frac{\Gamma(T)}{(E - E_0(T))^2 + \Gamma(T)^2}
+        -
+        \frac{\Gamma(T)}{(E + E_0(T))^2 + \Gamma(T)^2}
+        \right]
+        \right|
+        \cdot n_B(E,T)
+        """)
 
-    **Why pressure?**
-    Applying pressure changes the crystal structure, which affects how phonons behave. Comparing pressurized vs. non-pressurized tells us about material properties.
-    """)
+        st.markdown("The Bose population factor is")
+        st.latex(r"""
+        n_B(E,T) =
+        \begin{cases}
+        \displaystyle \frac{1}{e^{|E|/(k_B T)} - 1} + 1, & E \ge 0 \\[6pt]
+        \displaystyle \frac{1}{e^{|E|/(k_B T)} - 1}, & E < 0
+        \end{cases}
+        """)
+        st.latex(r"""
+        k_B = 0.08617\ \text{meV/K}
+        """)
+
+        st.markdown("#### Temperature Dependence of Parameters")
+
+        st.latex(r"""
+        A(T) = A_0 \left( 1 - 0.3 \frac{T - 2}{268} \right)
+        """)
+
+        st.latex(r"""
+        B(T) = B_0 \left( 1 + 2.5 \frac{T - 2}{268} \right)
+        """)
+
+        st.latex(r"""
+        E_0(T) = E_{00} \left( 1 - 0.1 \frac{T - 2}{268} \right)
+        """)
+
+        st.markdown("#### Temperature-Dependent Linewidth (HWHM)")
+
+        st.latex(r"""
+        \Gamma(T)
+        =
+        w_1(T)\,\Gamma_1(T)
+        +
+        w_2(T)\,\Gamma_2(T)
+        +
+        w_3(T)\,\Gamma_3(T)
+        """)
+
+        st.markdown("Piecewise-linear segments:")
+        st.latex(r"""
+        \Gamma_1(T) = \Gamma_0 \left[ 1 + m_1 (T - T_{\min}) \right]
+        """)
+        st.latex(r"""
+        \Gamma_2(T) = \Gamma_1(T_1) + \Gamma_0 m_2 (T - T_1)
+        """)
+        st.latex(r"""
+        \Gamma_3(T) = \Gamma_2(T_2) + \Gamma_0 m_3 (T - T_2)
+        """)
+
+        st.markdown("Smooth transition weights:")
+        st.latex(r"""
+        s_i(T) = \frac{1}{2}
+        \left[
+        1 + \tanh\!\left( \frac{T - T_i}{\Delta T} \right)
+        \right]
+        """)
+        st.latex(r"""
+        w_1 = 1 - s_1, \quad
+        w_2 = s_1 (1 - s_2), \quad
+        w_3 = s_2
+        """)
+
+        st.markdown("The slopes depend on pressure condition:")
+        st.latex(r"""
+        \{m_1, m_2, m_3\}
+        =
+        \begin{cases}
+        \{m_1^{(p)}, m_2^{(p)}, m_3^{(p)}\}, & \text{pressurized} \\
+        \{m_1^{(np)}, m_2^{(np)}, m_3^{(np)}\}, & \text{non-pressurized}
+        \end{cases}
+        """)
+
+        st.markdown("#### Measurement Statistics")
+
+        st.latex(r"""
+        N_i \sim \mathrm{Poisson}\!\left( I(E_i, T) \cdot t_i \right)
+        """)
+
+        st.markdown(
+            "Each energy point is measured with Poisson counting statistics, "
+            "which determine the uncertainties and the Fisher information used for scoring."
+        )
 
     with st.expander('### Experimental Trade-offs'):
         col1, col2 = st.columns(2)
