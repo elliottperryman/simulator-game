@@ -73,9 +73,9 @@ def initialize_session_state():
     if 'temp_slider' not in st.session_state:
         st.session_state.temp_slider = 50.0
     if 'ct_slider' not in st.session_state:
-        st.session_state.ct_slider = 60.0
+        st.session_state.ct_slider = 61.0
     if 'np_slider' not in st.session_state:
-        st.session_state.np_slider = 30
+        st.session_state.np_slider = 31
     if 'er_slider' not in st.session_state:
         st.session_state.er_slider = 6.0
     if 'sc_slider' not in st.session_state:
@@ -370,23 +370,193 @@ def fisher_subfunc(J, lam, count_time):
 
     return logdet(J.T @ (J * (count_time / lam)[:, None]))
 
-@jax.jit
-def hwhm_subfunc(args):
-    count_time = args[-1]
-    J = jax.vmap(lambda *a: jax.jacobian(model, argnums=4)(*a))(*args[:-1])
-    J = J.reshape(-1,1)
-    lam = jax.vmap(model)(*args[:-1])
+# @jax.jit
+def compute_hwhm_fisher(df_subset):
+    """Compute Fisher information for HWHM at specific temperature"""
+    if len(df_subset) == 0:
+        return np.inf  # Infinite error if no data
+    
+    # Extract data for this temperature group
+    E = jnp.array(df_subset['Energy'].values)
+    T_val = df_subset['T'].iloc[0]
+    pressurized = df_subset['pressurized'].iloc[0]
+    count_time = jnp.array(df_subset['count_time'].values)
+    
+    # Get true parameters at this temperature
+    amp_true = df_subset['amp'].iloc[0]
+    E0_true = df_subset['E0'].iloc[0]
+    hwhm_true = df_subset['hwhm'].iloc[0]
+    bg_true = df_subset['bg'].iloc[0]
+    
+    # Compute derivative of model with respect to HWHM
+    @jax.jit
+    def model_hwhm_derivative(E, T, amp, E0, hwhm, bg):
+        """Compute d(model)/d(hwhm)"""
+        # Helper function to compute the derivative
+        def dho_dhwhm(E, T, E0, hwhm, amp):
+            # Derivative of the Damped Harmonic Oscillator with respect to hwhm
+            term1 = hwhm / ((E - E0)**2 + hwhm**2)
+            term2 = hwhm / ((E + E0)**2 + hwhm**2)
+            
+            # Derivative of term1 with respect to hwhm
+            dterm1 = ((E - E0)**2 - hwhm**2) / ((E - E0)**2 + hwhm**2)**2
+            dterm2 = ((E + E0)**2 - hwhm**2) / ((E + E0)**2 + hwhm**2)**2
+            
+            return (amp / (E0 * jnp.pi)) * (dterm1 - dterm2) * bose(E, T)
+        
+        return dho_dhwhm(E, T, E0, hwhm, amp)
+    
+    # Vectorize the derivative computation
+    compute_derivatives = jax.vmap(model_hwhm_derivative, in_axes=(0, None, None, None, None, None))
+    
+    # Compute derivatives for all energy points
+    derivatives = compute_derivatives(E, T_val, amp_true, E0_true, hwhm_true, bg_true)
+    
+    # Compute predicted counts
+    compute_counts = jax.vmap(model, in_axes=(0, None, None, None, None, None))
+    lam = compute_counts(E, T_val, amp_true, E0_true, hwhm_true, bg_true)
     lam = jnp.clip(lam, 1e-12, jnp.inf)
     
-    W = count_time / lam
-    FI = J.T @ (J * W[:, None])
-    FI = FI.squeeze()
-    err = (1/jnp.sqrt(jnp.maximum(FI, 1e-3)))
-    return err
+    # Compute Fisher information for HWHM
+    # For Poisson statistics: Fisher information = Σ_i (dλ_i/dθ)² * (t_i/λ_i)
+    fisher_info = jnp.sum((derivatives**2) * (count_time / lam))
+    
+    # Standard error = 1/sqrt(Fisher information)
+    # Add small regularization to avoid division by zero
+    fisher_info = jnp.maximum(fisher_info, 1e-12)
+    std_error = 1.0 / jnp.sqrt(fisher_info)
+    
+    return float(std_error)
 
-def compute_hwhm_err(df):
-    args = jnp.array(df[['Energy', 'T', 'amp', 'E0', 'hwhm', 'bg', 'count_time']].values.T)
-    return hwhm_subfunc(args)
+# Replace the data summary section (around line 800-850) with:
+def compute_total_fisher_matrix_all_params():
+    """Compute and return the full Fisher information matrix for ALL parameters"""
+    if len(st.session_state.all_scans) == 0:
+        return None, None
+    
+    # Extract arrays
+    E = jnp.array(st.session_state.all_scans['Energy'].values)
+    T = jnp.array(st.session_state.all_scans['T'].values)
+    pressurized = jnp.array(st.session_state.all_scans['pressurized'].values)
+    count_time = jnp.array(st.session_state.all_scans['count_time'].values)
+    
+    # Define full parameter set (10 parameters)
+    theta_full = jnp.array([
+        TRUE_AMP0,               # 0: Amplitude at 2K
+        TRUE_E00,                # 1: E0 at 2K  
+        TRUE_BG0,                # 2: Background at 2K
+        TRUE_HWHM0,              # 3: HWHM intercept at 2K
+        TRUE_SLOPE1_PRESSURIZED,     # 4: Pressurized slope 1 (T < 50K)
+        TRUE_SLOPE2_PRESSURIZED,     # 5: Pressurized slope 2 (50K < T < 150K)
+        TRUE_SLOPE3_PRESSURIZED,     # 6: Pressurized slope 3 (T > 150K)
+        TRUE_SLOPE1_NON_PRESSURIZED, # 7: Non-pressurized slope 1
+        TRUE_SLOPE2_NON_PRESSURIZED, # 8: Non-pressurized slope 2  
+        TRUE_SLOPE3_NON_PRESSURIZED, # 9: Non-pressurized slope 3
+    ])
+    
+    # Define the full model function with all parameters
+    @jax.jit
+    def full_model_single(E, T, pressurized, *params):
+        amp0, E00, bg0, hwhm0, s1p, s2p, s3p, s1np, s2np, s3np = params
+        
+        # Temperature-dependent parameters
+        amp = amp0 * (1.0 - 0.3 * ((T - 2.0) / 268.0))
+        bg = bg0 * (1.0 + 2.5 * ((T - 2.0) / 268.0))
+        E0 = E00 * (1.0 - 0.1 * ((T - 2.0) / 268.0))
+        
+        hwhm = temperature_dependent_hwhm(
+            T, hwhm0,
+            pressurized=jnp.asarray(pressurized),
+            slope1p=s1p, slope2p=s2p, slope3p=s3p,
+            slope1np=s1np, slope2np=s2np, slope3np=s3np,
+        )
+        
+        return model(E, T, amp, E0, hwhm, bg)
+    
+    # Vectorized model
+    @jax.jit
+    def lambda_model_full(theta, E, T, pressurized):
+        return jax.vmap(full_model_single, in_axes=(0, 0, 0, *(None for _ in range(10))))(
+            E, T, pressurized, *theta
+        )
+    
+    # Compute Jacobian
+    @jax.jit
+    def compute_jacobian_full(theta, E, T, pressurized):
+        return jax.jacobian(lambda_model_full, argnums=0)(theta, E, T, pressurized)
+    
+    # Compute λ_i
+    lam = lambda_model_full(theta_full, E, T, pressurized)
+    lam = jnp.clip(lam, 1e-12, jnp.inf)
+    
+    # Jacobian
+    J_full = compute_jacobian_full(theta_full, E, T, pressurized)
+    
+    # Fisher information matrix
+    W = count_time / lam
+    FI_full = J_full.T @ (J_full * W[:, None])
+    
+    # Parameter names in English
+    param_names_full = [
+        "Amplitude (2K)",
+        "Peak Center E0 (2K)", 
+        "Background (2K)",
+        "HWHM Intercept (2K)",
+        "Pressurized Slope 1 (T < 50K)",
+        "Pressurized Slope 2 (50-150K)",
+        "Pressurized Slope 3 (T > 150K)",
+        "Non-Pressurized Slope 1 (T < 50K)",
+        "Non-Pressurized Slope 2 (50-150K)",
+        "Non-Pressurized Slope 3 (T > 150K)"
+    ]
+    
+    return np.array(FI_full), param_names_full
+
+
+def compute_schur_complement():
+    """Compute Schur complement for slope parameters after conditioning out nuisance parameters"""
+    FI_full, param_names = compute_total_fisher_matrix_all_params()
+    if FI_full is None:
+        return None, None, None
+    
+    # Partition indices
+    # Nuisance parameters: amplitude, E0, background, HWHM intercept (indices 0-3)
+    # Slope parameters: all slopes (indices 4-9)
+    n_nuisance = 4
+    n_slopes = 6
+    
+    FI_AA = FI_full[:n_nuisance, :n_nuisance]
+    FI_AB = FI_full[:n_nuisance, n_nuisance:]
+    FI_BA = FI_full[n_nuisance:, :n_nuisance]
+    FI_BB = FI_full[n_nuisance:, n_nuisance:]
+    
+    # Compute Schur complement
+    try:
+        FI_AA_inv = np.linalg.inv(FI_AA + np.eye(n_nuisance) * 1e-10)  # Regularize
+        schur_complement = FI_BB - FI_BA @ FI_AA_inv @ FI_AB
+        
+        # Slope parameter names
+        slope_names = param_names[n_nuisance:]
+        
+        # Partition into pressurized and non-pressurized
+        schur_press = schur_complement[:3, :3]
+        schur_non_press = schur_complement[3:, 3:]
+        
+        # Compute log determinants
+        def logdet_safe(mat):
+            sign, ld = np.linalg.slogdet(mat)
+            return ld if sign > 0 else -np.inf
+        
+        score_press = logdet_safe(schur_press)
+        score_non_press = logdet_safe(schur_non_press)
+        score_total = logdet_safe(schur_complement)
+        
+        return score_non_press, score_press, score_total, schur_complement, slope_names
+        
+    except np.linalg.LinAlgError:
+        return -np.inf, -np.inf, -np.inf, None, None
+
+
 
 def format_time_delta(seconds):
     """Format seconds into flexible hh:mm:ss format"""
@@ -586,7 +756,7 @@ def create_plots():
         non_press_scans = st.session_state.all_scans[~st.session_state.all_scans['pressurized']]
         for T, df in non_press_scans.groupby('T'):
             if len(df) > 0:
-                hwhm_err = compute_hwhm_err(df)
+                hwhm_err = compute_hwhm_fisher(df)
                 ax3.errorbar(T, df['hwhm'].mean(), hwhm_err,
                             linestyle='none', color='gold', linewidth=2,
                             marker='o', markersize=6, markeredgecolor='gold',
@@ -597,7 +767,7 @@ def create_plots():
         press_scans = st.session_state.all_scans[st.session_state.all_scans['pressurized']]
         for T, df in press_scans.groupby('T'):
             if len(df) > 0:
-                hwhm_err = compute_hwhm_err(df)
+                hwhm_err = compute_hwhm_fisher(df)
                 ax3.errorbar(T, df['hwhm'].mean(), hwhm_err,
                             linestyle='none', color='red', linewidth=2,
                             marker='o', markersize=6, markeredgecolor='red',
@@ -696,14 +866,14 @@ def main():
             min_value=2.0,
             max_value=270.0,
             key='temp_slider',
-            step=1.0,
+            step=2.0,
             help="Center temperature for the scan"
         ) 
         st.slider(
             "Counting Time per Point [s]",
             min_value=1.0,
-            max_value=1800.0,
-            step=1.0,
+            max_value=800.0,
+            step=30.0,
             key="ct_slider",
             help="Time spent measuring each energy point"
         )
@@ -713,7 +883,7 @@ def main():
             min_value=1,
             max_value=100,
             key='np_slider',
-            step=1,
+            step=10,
             help="Number of energy points in the scan"
         )
         
@@ -753,32 +923,213 @@ def main():
     # Data summary
     st.markdown("### Data Summary")
     if len(st.session_state.all_scans) > 0:
-
-                # Fisher scores
-        non_score, press_score, total_score = compute_fisher_scores()
+        # Compute Fisher information for all parameters
+        FI_full, param_names_full = compute_total_fisher_matrix_all_params()
+        
+        # Compute scores using Schur complement
+        schur_non_score, schur_press_score, schur_total_score, schur_matrix, slope_names = compute_schur_complement()
         
         def format_score(score):
-            if score == -np.inf:
+            if score == -np.inf or np.isnan(score):
                 return "-∞"
             else:
                 return f"{score:.2f}"
         
-        st.markdown("### Fisher Information Scores")
-        st.markdown(f'##### Total Score: {format_score(total_score)}')
+        st.markdown("### Fisher Information Scores (Schur Complement)")
+        st.markdown(f'##### Total Schur Score: {format_score(schur_total_score)}')
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f'Non-Pressurized Score: {format_score(non_score)}')
+            st.markdown(f'Non-Pressurized Schur Score: {format_score(schur_non_score)}')
         with col2:
-            st.markdown(f'Pressurized Score: {format_score(press_score)}')
+            st.markdown(f'Pressurized Schur Score: {format_score(schur_press_score)}')
         
-        st.caption("Higher score = Better measurement precision & Score = -∞ when measurement is insufficient")
-    
+        st.info("""
+        **Schur Complement Score**: Measures information about slope parameters 
+        AFTER accounting for uncertainty in amplitude, peak position, background, and HWHM intercept.
+        Higher score = better ability to determine temperature dependence.
+        """)
 
+        # Display Full Fisher Information Matrix
+        with st.expander('Matrix Visualization'):
+            if FI_full is not None:
+                tab1, tab2, tab3 = st.tabs(["Fisher Matrix", "Covariance Matrix", "Schur Complement"])
+                
+                with tab1:
+                    # Create a more readable display
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    
+                    # Use shorter names for display
+                    short_names = [
+                        "Amp(2K)", "E0(2K)", "BG(2K)", "HWHM(2K)",
+                        "P Slope1", "P Slope2", "P Slope3",
+                        "NP Slope1", "NP Slope2", "NP Slope3"
+                    ]
+                    
+                    # Normalize for better visualization
+                    FI_norm = np.abs(FI_full) / np.max(np.abs(FI_full))
+                    
+                    im = ax.imshow(FI_norm, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
+                    
+                    # Set labels
+                    ax.set_xticks(range(10))
+                    ax.set_yticks(range(10))
+                    ax.set_xticklabels(short_names, rotation=45, ha='right')
+                    ax.set_yticklabels(short_names)
+                    ax.set_title("Normalized Fisher Information Matrix (|values|/max)")
+                    
+                    # Add colorbar
+                    plt.colorbar(im, ax=ax, label='Normalized Information')
+                    
+                    # Add text annotations for matrix values (only significant ones)
+                    threshold = 0.1  # Only show values above 10% of max
+                    for i in range(10):
+                        for j in range(10):
+                            if np.abs(FI_full[i, j]) > np.max(np.abs(FI_full)) * threshold:
+                                text = ax.text(j, i, f'{FI_full[i, j]:.1e}',
+                                            ha="center", va="center", 
+                                            color="white" if FI_norm[i, j] > 0.5 else "black",
+                                            fontsize=7)
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    
+                    # Show interpretation
+                    with st.expander("How to interpret this matrix"):
+                        st.markdown("""
+                        **Color Coding:**
+                        - 🔴 **Red**: Strong information (parameters well-constrained)
+                        - ⚪ **White**: Moderate information  
+                        - 🔵 **Blue**: Weak information (parameters poorly constrained)
+                        
+                        **Matrix Structure:**
+                        - **Diagonal elements**: How well each parameter is determined individually
+                        - **Off-diagonal elements**: How parameters are correlated
+                        - **Blocks**: Related parameters (e.g., slopes) often form blocks
+                        
+                        **What makes a good matrix?**
+                        1. **Strong diagonal** = Each parameter is individually measurable
+                        2. **Weak off-diagonals** = Parameters are independent
+                        3. **Well-conditioned** = All eigenvalues are positive and not too different
+                        """)
+                
+                with tab2:
+                    # with col2:
+                    st.markdown("#### Covariance Matrix")
+                    # Rank parameters by their diagonal values (individual information)
+                    
+                    # Compute correlations from covariance matrix
+                    try:
+                        covariance = np.linalg.pinv(FI_full + np.eye(10) * 1e-10)
+                             # Create a more readable display
+                        fig, ax = plt.subplots(figsize=(8, 6))
+                        
+                        # Use shorter names for display
+                        short_names = [
+                            "Amp(2K)", "E0(2K)", "BG(2K)", "HWHM(2K)",
+                            "P Slope1", "P Slope2", "P Slope3",
+                            "NP Slope1", "NP Slope2", "NP Slope3"
+                        ]
+                        
+                        # Normalize for better visualization
+                        
+                        im = ax.imshow(covariance, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
+                        
+                        # Set labels
+                        ax.set_xticks(range(10))
+                        ax.set_yticks(range(10))
+                        ax.set_xticklabels(short_names, rotation=45, ha='right')
+                        ax.set_yticklabels(short_names)
+                        ax.set_title("Covariance Matrix")
+                        
+                        # Add colorbar
+                        plt.colorbar(im, ax=ax, label='Covariane')
+                        
+                        # Add text annotations for matrix values (only significant ones)
+                        threshold = 0.1  # Only show values above 10% of max
+                        for i in range(10):
+                            for j in range(i+1):
+                                text = ax.text(j, i, f'{covariance[i, j]:.1e}',
+                                            ha="center", va="center", 
+                                            color="black",
+                                            fontsize=7)
+                        
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        
+                    except np.linalg.LinAlgError:
+                        st.warning("Cannot compute correlations - matrix is singular")
+                
+                with tab3:
+                    # Display Schur Complement Matrix
+                    st.markdown("#### Schur Complement Matrix (Slopes Only)")
+                    st.markdown("Information about slope parameters AFTER accounting for uncertainty in other parameters")
+                    
+                    if schur_matrix is not None:
+                        fig2, ax2 = plt.subplots(figsize=(6, 5))
+                        
+                        # Normalize for visualization
+                        schur_norm = np.abs(schur_matrix) / np.max(np.abs(schur_matrix))
+                        
+                        im2 = ax2.imshow(schur_norm, cmap='RdYlBu_r', aspect='auto', vmin=0, vmax=1)
+                        
+                        # Short names for slopes
+                        slope_short_names = ["P S1", "P S2", "P S3", "NP S1", "NP S2", "NP S3"]
+                        
+                        ax2.set_xticks(range(6))
+                        ax2.set_yticks(range(6))
+                        ax2.set_xticklabels(slope_short_names, rotation=45, ha='right')
+                        ax2.set_yticklabels(slope_short_names)
+                        ax2.set_title("Schur Complement Matrix")
+                        
+                        plt.colorbar(im2, ax=ax2, label='Normalized Information')
+                        
+                        # Add text annotations
+                        for i in range(6):
+                            for j in range(6):
+                                if np.abs(schur_matrix[i, j]) > np.max(np.abs(schur_matrix)) * 0.1:
+                                    text = ax2.text(j, i, f'{schur_matrix[i, j]:.1e}',
+                                                ha="center", va="center", 
+                                                color="white" if schur_norm[i, j] > 0.5 else "black",
+                                                fontsize=8)
+                        
+                        plt.tight_layout()
+                        st.pyplot(fig2)
+                        
+                        # Schur complement statistics
+                        st.markdown("#### Schur Complement Statistics")
+                        
+                        schur_eigenvalues = np.linalg.eigvals(schur_matrix)
+                        pos_schur_eigenvalues = schur_eigenvalues[schur_eigenvalues.real > 0]
+                        
+                        if len(pos_schur_eigenvalues) > 0:
+                            schur_cond = np.max(np.abs(schur_eigenvalues)) / np.min(np.abs(pos_schur_eigenvalues))
+                        else:
+                            schur_cond = np.inf
+                        
+                        schur_stats = {
+                            "Total Information (Trace)": f"{np.trace(schur_matrix):.2e}",
+                            "Determinant": f"{np.linalg.det(schur_matrix):.2e}",
+                            "Condition Number": f"{schur_cond:.2e}",
+                            "Information Loss to Nuisance Params": f"{100*(1 - np.trace(schur_matrix)/np.trace(FI_full[4:, 4:])):.1f}%",
+                        }
+                        
+                        for key, value in schur_stats.items():
+                            st.metric(key, value)
+                        
+                        st.info("""
+                        **Information Loss**: Shows how much information about slopes is "lost" because 
+                        we also have to determine amplitude, peak position, background, and HWHM intercept.
+                        """)
+            
+        # Traditional summary data
+        st.markdown("### Experimental Summary")
+        
         summary_data = {
             "Total # of Measurements": len(st.session_state.all_scans),
             "Non-Pressurized Measurements": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
             "Pressurized Measurements": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
             "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
+            "Temperature Range Covered": f"{st.session_state.all_scans['T'].min():.1f}K to {st.session_state.all_scans['T'].max():.1f}K",
             "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
             "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
             "Time Used": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
@@ -787,36 +1138,115 @@ def main():
         cols = st.columns(3)
         for idx, (key, value) in enumerate(summary_data.items()):
             cols[idx % 3].metric(key, value)
-    else:
-        st.info("No scans collected yet. Use the controls in the sidebar to run your first scan!")
-    
-
-    # ============================================================
-    # Pedagogical Section
-    # ============================================================
+        
 
     st.markdown('---')
     st.markdown('## Understanding the Game')
 
-    with st.expander('### The Physics Experiment'):
-        st.markdown("""
-    **What are you measuring?**
-    You're studying a crystal using **neutron scattering**. When neutrons hit the crystal, they interact with atomic vibrations called **phonons**.
+    with st.expander("### The Physics Experiment"):
+        st.markdown("#### Neutron Scattering Model")
 
-    **What's a damped harmonic oscillator?**
-    This mathematical model describes how phonons behave:
-    - **Oscillator**: Atoms vibrate back and forth
-    - **Damped**: Vibrations slowly die out over time
-    - **In scattering**: Shows up as a peak in your measurement
+        st.latex(r"""
+        I(E, T) = S(E, T) + B(T)
+        """)
 
-    **What does HWHM mean?**
-    - **Half-Width at Half-Maximum** = Width of peak at half its maximum height
-    - **Physical meaning**: Related to how long phonons last before scattering
-    - **Temperature dependence**: As temperature increases, peaks usually broaden (phonons scatter more)
+        st.markdown("The scattering function is modeled as a damped harmonic oscillator:")
+        st.latex(r"""
+        S(E, T)
+        =
+        \left|
+        \frac{A(T)}{\pi E_0(T)}
+        \left[
+        \frac{\Gamma(T)}{(E - E_0(T))^2 + \Gamma(T)^2}
+        -
+        \frac{\Gamma(T)}{(E + E_0(T))^2 + \Gamma(T)^2}
+        \right]
+        \right|
+        \cdot n_B(E,T)
+        """)
 
-    **Why pressure?**
-    Applying pressure changes the crystal structure, which affects how phonons behave. Comparing pressurized vs. non-pressurized tells us about material properties.
-    """)
+        st.markdown("The Bose population factor is")
+        st.latex(r"""
+        n_B(E,T) =
+        \begin{cases}
+        \displaystyle \frac{1}{e^{|E|/(k_B T)} - 1} + 1, & E \ge 0 \\[6pt]
+        \displaystyle \frac{1}{e^{|E|/(k_B T)} - 1}, & E < 0
+        \end{cases}
+        """)
+        st.latex(r"""
+        k_B = 0.08617\ \text{meV/K}
+        """)
+
+        st.markdown("#### Temperature Dependence of Parameters")
+
+        st.latex(r"""
+        A(T) = A_0 \left( 1 - 0.3 \frac{T - 2}{268} \right)
+        """)
+
+        st.latex(r"""
+        B(T) = B_0 \left( 1 + 2.5 \frac{T - 2}{268} \right)
+        """)
+
+        st.latex(r"""
+        E_0(T) = E_{00} \left( 1 - 0.1 \frac{T - 2}{268} \right)
+        """)
+
+        st.markdown("#### Temperature-Dependent Linewidth (HWHM)")
+
+        st.latex(r"""
+        \Gamma(T)
+        =
+        w_1(T)\,\Gamma_1(T)
+        +
+        w_2(T)\,\Gamma_2(T)
+        +
+        w_3(T)\,\Gamma_3(T)
+        """)
+
+        st.markdown("Piecewise-linear segments:")
+        st.latex(r"""
+        \Gamma_1(T) = \Gamma_0 \left[ 1 + m_1 (T - T_{\min}) \right]
+        """)
+        st.latex(r"""
+        \Gamma_2(T) = \Gamma_1(T_1) + \Gamma_0 m_2 (T - T_1)
+        """)
+        st.latex(r"""
+        \Gamma_3(T) = \Gamma_2(T_2) + \Gamma_0 m_3 (T - T_2)
+        """)
+
+        st.markdown("Smooth transition weights:")
+        st.latex(r"""
+        s_i(T) = \frac{1}{2}
+        \left[
+        1 + \tanh\!\left( \frac{T - T_i}{\Delta T} \right)
+        \right]
+        """)
+        st.latex(r"""
+        w_1 = 1 - s_1, \quad
+        w_2 = s_1 (1 - s_2), \quad
+        w_3 = s_2
+        """)
+
+        st.markdown("The slopes depend on pressure condition:")
+        st.latex(r"""
+        \{m_1, m_2, m_3\}
+        =
+        \begin{cases}
+        \{m_1^{(p)}, m_2^{(p)}, m_3^{(p)}\}, & \text{pressurized} \\
+        \{m_1^{(np)}, m_2^{(np)}, m_3^{(np)}\}, & \text{non-pressurized}
+        \end{cases}
+        """)
+
+        st.markdown("#### Measurement Statistics")
+
+        st.latex(r"""
+        N_i \sim \mathrm{Poisson}\!\left( I(E_i, T) \cdot t_i \right)
+        """)
+
+        st.markdown(
+            "Each energy point is measured with Poisson counting statistics, "
+            "which determine the uncertainties and the Fisher information used for scoring."
+        )
 
     with st.expander('### Experimental Trade-offs'):
         col1, col2 = st.columns(2)
@@ -1061,145 +1491,6 @@ def main():
     """)
 
 
-
-    # st.markdown('---')
-    # st.markdown('### Understanding the Game')
-    # st.markdown("#### Motivation")
-    # st.markdown("""
-    # To improve the quality of your experiment you could:
-                
-    # - Increase count rates (count longer)
-    # - Increase neutron flux (better source)
-    # - Decrease background (more shielding) 
-    # - **Choose measurement locations more carefully**
-
-    # **Goal:** Understand what makes a "better" measurement.
-    # Spoiler: The best measurements maximally constrain the physics parameters of interest
-    # """)
-
-    # st.markdown("---")
-    # with st.expander('Maximum Likelihood Estimation'):
-
-    #     st.markdown("## Statistical View of Experiments")
-    #     st.markdown("### Measurement Model")
-    #     st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
-
-    #     st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
-
-    #     st.markdown("#### Refresher on Probability")
-    #     st.markdown(r'For the Poisson distribution, the probability of observing a count n given a rate $\lambda$ is:')
-    #     st.latex(r"P(n \mid \lambda) = \frac{\lambda^n e^{-\lambda}}{n!}")
-    #     st.markdown('A Gaussian random variable has the probability distribution function')
-    #     st.latex(r"""
-    #     P(x \mid \mu, \sigma) =
-    #     \frac{1}{\sqrt{2\pi\sigma^2}}
-    #     \exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)
-    #     """)
-    #     st.markdown("Given multiple independent data $\\{x_i\\}$ and parameters $\\theta$ the likelihood of observing some data given the parameters $\theta$ is:")
-
-    #     st.latex(r"\mathcal{L}(\theta) = \prod_{i} P(x_i \mid \theta)")
-
-    #     st.markdown("We deal with the log likelihood:")
-
-    #     st.latex(r"\log \mathcal{L}(\theta) = \sum_i \log P(x_i \mid \theta)")
-
-    #     st.markdown("We estimate parameters by maximizing likelihood:")
-
-    #     st.latex(r"\hat{\theta} = \arg\max_{\theta} \log \mathcal{L}(\theta)")
-
-    #     st.markdown("For Gaussian noise with variance $\\sigma^2$:")
-    #     st.latex(r"""
-    #     \log \mathcal{L}
-    #     = -\frac{1}{2}
-    #     \sum_i
-    #     \left[
-    #     \frac{(x_i - f_i(\theta))^2}{\sigma^2}
-    #     + \log(2\pi\sigma^2)
-    #     \right]
-    #     """)
-
-    #     st.info("This is equivalent to **least-squares minimization**.")
-    # with st.expander('Parameter Uncertainty'):
-    #     st.markdown("## Parameter Uncertainty")
-
-    #     st.markdown(r'One usually sees parameter uncertainty as $\mu \pm \sigma$. This comes from a **Gaussian** approximation of the likelihood.')
-    #     st.markdown(r'This is calculated by first calculating the Fisher Information Matrix $\mathcal{I}$:')
-    #     st.latex(r"""
-    #     \mathcal{I}_{ij}
-    #     = -\mathbb{E}
-    #     \left[
-    #     \frac{\partial^2 \log \mathcal{L}}
-    #     {\partial \theta_i \partial \theta_j}
-    #     \right]
-    #     """)
-    #     st.markdown('The Fisher information matrix inverse gives the covariance')
-    #     st.latex(r"\Sigma(\theta) = \mathcal{I}^{-1}")
-
-    #     st.markdown("Near the maximum:")
-
-    #     st.latex(r"""
-    #     \log \mathcal{L}(\theta)
-    #     \approx
-    #     \log \mathcal{L}(\hat{\theta})
-    #     -
-    #     \frac{1}{2}
-    #     (\theta - \hat{\theta})^T
-    #     \mathcal{I}
-    #     (\theta - \hat{\theta})
-    #     """)
-
-    #     st.markdown("Contours of constant likelihood form **ellipses**.")
-
-    # with st.expander('Bayesian Stats'):
-    #     st.markdown("## Bayesian Interpretation")
-    #     st.markdown("Bayes theorem tells us that:")
-
-    #     st.latex(r"""
-    #     P(\theta \mid x)
-    #     =
-    #     \frac{P(x \mid \theta) P(\theta)}
-    #     {P(x)}
-    #     """)
-
-    #     st.markdown(r"""
-    #     Where:
-
-    #     - $P(\theta)$: prior  
-    #     - $P(x \mid \theta)$: likelihood  
-    #     - $P(\theta \mid x)$: posterior  
-    #     """)
-
-    #     st.markdown("""
-    # Bayesians believe:
-    #     * The posterior is the quantity of interest
-    #     * Point estimates bad - distribution good
-    #         - as an example, rather than say "Sun most likely," say "75% chance of sun, 20% chance rain, and 5% chance of hurricane."
-    # """)
-    #     st.info(r"Maximum likelihood estimate (MLE) ≡ Maximum posterior (MAP) estimator for flat priors ($P(\theta)$=const).")
-
-
-    # st.markdown("---")
-    # st.markdown("## Experimental Design")
-    # st.markdown("### Goal")
-    # st.markdown("Choose experiment settings $s$ to **maximize information gain**:")
-
-    # st.latex(r"s^* = \arg\max_s \det \mathcal{I}(s)")
-
-    # st.markdown("equivalent to minimizing parameter uncertainty.")
-
-    # st.markdown("---")
-    # st.markdown("## Autonomous Experimentation Loop")
-    # st.markdown("""
-    # 1. Measure  
-    # 2. Fit model  
-    # 3. Estimate uncertainty  
-    # 4. Choose next experiment  
-    # 5. Repeat  
-    # """)
-
-    # # Footer
-    # st.markdown("---")
-    # st.caption("Neutron Scattering Experiment Simulator | Optimize your measurement strategy within 12 hours!")
 
 # ============================================================
 # Run the app
