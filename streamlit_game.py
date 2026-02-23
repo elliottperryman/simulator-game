@@ -7,6 +7,7 @@ from scipy.stats import poisson
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.gridspec 
+from time import perf_counter
 
 # ============================================================
 # Streamlit Configuration
@@ -121,18 +122,18 @@ TIME_BUDGET = 12 * 3600  # 12 hours in seconds
 def get_empty_scans_df():
     """Return an empty DataFrame with the correct schema"""
     return pd.DataFrame({
-        'T': pd.Series(dtype='float64'),
-        'Energy': pd.Series(dtype='float64'),
-        'counts_per_sec': pd.Series(dtype='float64'),
-        'error_l': pd.Series(dtype='float64'),
-        'error_h': pd.Series(dtype='float64'),
-        'lam': pd.Series(dtype='float64'),
-        'amp': pd.Series(dtype='float64'),
-        'E0': pd.Series(dtype='float64'),
-        'hwhm': pd.Series(dtype='float64'),
-        'bg': pd.Series(dtype='float64'),
+        'T': pd.Series(dtype='float32'),
+        'Energy': pd.Series(dtype='float32'),
+        'counts_per_sec': pd.Series(dtype='float32'),
+        'error_l': pd.Series(dtype='float32'),
+        'error_h': pd.Series(dtype='float32'),
+        'lam': pd.Series(dtype='float32'),
+        'amp': pd.Series(dtype='float32'),
+        'E0': pd.Series(dtype='float32'),
+        'hwhm': pd.Series(dtype='float32'),
+        'bg': pd.Series(dtype='float32'),
         'counts': pd.Series(dtype='int64'),
-        'count_time': pd.Series(dtype='float64'),
+        'count_time': pd.Series(dtype='float32'),
         'pressurized': pd.Series(dtype='bool'),
     })
 
@@ -140,6 +141,7 @@ def get_empty_scans_df():
 # JAX Warmup Function
 # ============================================================
 def warmup_jax():
+    t1 = perf_counter()
     """Warm up JAX compilations to avoid first-run slowdowns"""
     if st.session_state.jax_warmed_up:
         return
@@ -187,6 +189,8 @@ def warmup_jax():
                                slope1np=TRUE_SLOPE1_NON_PRESSURIZED, slope2np=TRUE_SLOPE2_NON_PRESSURIZED, slope3np=TRUE_SLOPE3_NON_PRESSURIZED)
     
     st.session_state.jax_warmed_up = True
+    t2 = perf_counter()
+    print(f'warming up jax took {t2-t1} secs')
 
 # ============================================================
 # Damped Harmonic Oscillator Model
@@ -203,17 +207,14 @@ def DampedHarmonicOscillator(E, T, E0, hwhm, amp):
         (hwhm / ((E - E0)**2 + hwhm**2) - hwhm / ((E + E0)**2 + hwhm**2)))
     return symmetric_part * bose(E, T)
 
-@jax.jit
 def model(x, T, amp, E0, hwhm, bg):
     """Full model: Damped Harmonic Oscillator with Bose factor + background"""
     return DampedHarmonicOscillator(x, T, E0, hwhm, amp) + bg
 
-@jax.jit
 def smooth_step(x, x0, width):
     """Smooth transition from 0 to 1"""
     return 0.5 * (1.0 + jnp.tanh((x - x0) / width))
 
-@jax.jit
 def select_slopes(pressurized,
                   slope1p, slope2p, slope3p,
                   slope1np, slope2np, slope3np):
@@ -222,7 +223,6 @@ def select_slopes(pressurized,
     slopes_np = jnp.array([slope1np, slope2np, slope3np])
     return jnp.where(pressurized, slopes_p, slopes_np)
 
-@jax.jit
 def temperature_dependent_hwhm(
     T,
     hwhm0,
@@ -297,7 +297,6 @@ def sample_poisson_scan(T, amp0, hwhm0, bg0, E00, npts, E_range, count_time, sca
     
     return Es, counts_per_sec, errors, lam, amp, E0, hwhm, bg, counts
 
-@jax.jit
 def meta_model(E, T, pressurized,
                slope1p, slope2p, slope3p,
                slope1np, slope2np, slope3np):
@@ -314,7 +313,6 @@ def meta_model(E, T, pressurized,
 
     return model(E, T, amp, E0, hwhm, bg)
 
-@jax.jit
 def lambda_model(theta, E, T, pressurized):
     s1p, s2p, s3p, s1np, s2np, s3np = theta
     rate = jax.vmap(
@@ -324,7 +322,6 @@ def lambda_model(theta, E, T, pressurized):
       s1p, s2p, s3p, s1np, s2np, s3np)
     return rate
 
-@jax.jit
 def lambda_model_jacobian(theta0, energy, temp, pressurized):
     return jax.jacobian(lambda_model, argnums=0)(theta0, energy, temp, pressurized)
 
@@ -362,7 +359,6 @@ def compute_fisher_scores():
     
     return float(lnp), float(lp), float(lnp + lp)
 
-@jax.jit
 def fisher_subfunc(J, lam, count_time):
     def logdet(mat):
         sign, ld = jnp.linalg.slogdet(mat)
@@ -370,7 +366,6 @@ def fisher_subfunc(J, lam, count_time):
 
     return logdet(J.T @ (J * (count_time / lam)[:, None]))
 
-# @jax.jit
 def compute_hwhm_fisher(df_subset):
     """Compute Fisher information for HWHM at specific temperature"""
     if len(df_subset) == 0:
@@ -389,7 +384,6 @@ def compute_hwhm_fisher(df_subset):
     bg_true = df_subset['bg'].iloc[0]
     
     # Compute derivative of model with respect to HWHM
-    @jax.jit
     def model_hwhm_derivative(E, T, amp, E0, hwhm, bg):
         """Compute d(model)/d(hwhm)"""
         # Helper function to compute the derivative
@@ -455,7 +449,6 @@ def compute_total_fisher_matrix_all_params():
     ])
     
     # Define the full model function with all parameters
-    @jax.jit
     def full_model_single(E, T, pressurized, *params):
         amp0, E00, bg0, hwhm0, s1p, s2p, s3p, s1np, s2np, s3np = params
         
@@ -474,14 +467,12 @@ def compute_total_fisher_matrix_all_params():
         return model(E, T, amp, E0, hwhm, bg)
     
     # Vectorized model
-    @jax.jit
     def lambda_model_full(theta, E, T, pressurized):
         return jax.vmap(full_model_single, in_axes=(0, 0, 0, *(None for _ in range(10))))(
             E, T, pressurized, *theta
         )
     
     # Compute Jacobian
-    @jax.jit
     def compute_jacobian_full(theta, E, T, pressurized):
         return jax.jacobian(lambda_model_full, argnums=0)(theta, E, T, pressurized)
     
@@ -555,7 +546,6 @@ def compute_schur_complement():
         
     except np.linalg.LinAlgError:
         return -np.inf, -np.inf, -np.inf, None, None
-
 
 
 def format_time_delta(seconds):
@@ -807,33 +797,19 @@ def main():
     
     # Header info
     st.markdown("""
-**Problem:** You are an experimentalist with 2 samples of the same crystal. In one sample, uniaxial pressure is applied. In the other, there is no pressure applied.
+Imagine you are an experimentalist that wants to understand how pressure effects your crystal. You have two samples of your crystal, and you have applied a 
+uniaxial pressure to one sample. You are making scans at different energy transfer values (the x axis) and observing the neutron intensity (the y axis).
+You believe that the bump you observe has a width that changes with temperature and changes differently for the two samples. Your goal is to use your limited 
+beamtime to measure as much useful information as possible. You have 12 hours and the controls on the left. You are scored based on the precision of the 
+parameters governing the width of the peak as a function of temperature. The game will stop when you request more time than is available. Good luck!
                 
-**Goal:** Your goal is to understand how the width of the lineshape changes with increasing temperature.
-                
-**Resources:** You have 12 hours and can control the experiment using the widgets on the left.
-                
-**Scoring:** You are scored based on the precision of the parameters fit.
-
 """)
-    st.info('**Note:** The score is based on the precision of the **slope** of the half-width at half max as a function of temperature. '
-    ' This is a piecewise linear model, so energy scans at different temperatures are useful. Also, all parameters are treated' \
-    'as already fit, which is not realistic (but keeps the game able to be computed quickly)')    
     # Sidebar for controls
     st.markdown("---")
-    st.markdown("### How to Play")
-    st.info("""
-    1. Adjust scan parameters in the sidebar
-    2. Run scans at different temperatures
-    3. Balance between pressurized and non-pressurized conditions
-    4. Maximize your Fisher score within 12 hours
-    5. Try to cover a wide temperature range!
-    """)
     with st.sidebar:
-        st.markdown("## Experiment Controls")
+        st.markdown("# Experiment Controls")
         total_scan_time = st.session_state.ct_slider * st.session_state.np_slider
         remaining_time = TIME_BUDGET - st.session_state.used_time
-
 
         if st.button("Scan Non-Pressurized Sample", 
                     disabled=st.session_state.game_over or remaining_time <= 0,
@@ -913,7 +889,6 @@ def main():
             st.warning(f"⚠️ Not enough time for full scan! You only have {format_time_delta(remaining_time)} remaining.")
         
         st.markdown("---")
-                
 
     # Main content area
     # Create and display plots
@@ -921,7 +896,6 @@ def main():
     st.pyplot(fig)
     
     # Data summary
-    st.markdown("### Data Summary")
     if len(st.session_state.all_scans) > 0:
         # Compute Fisher information for all parameters
         FI_full, param_names_full = compute_total_fisher_matrix_all_params()
@@ -935,21 +909,34 @@ def main():
             else:
                 return f"{score:.2f}"
         
-        st.markdown("### Fisher Information Scores (Schur Complement)")
-        st.markdown(f'##### Total Schur Score: {format_score(schur_total_score)}')
+        # st.markdown("### Score")
+        st.markdown(f'## Total Score: {format_score(schur_total_score)}')
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f'Non-Pressurized Schur Score: {format_score(schur_non_score)}')
+            st.markdown(f'Non-Pressurized Score: {format_score(schur_non_score)}')
         with col2:
-            st.markdown(f'Pressurized Schur Score: {format_score(schur_press_score)}')
-        
-        st.info("""
-        **Schur Complement Score**: Measures information about slope parameters 
-        AFTER accounting for uncertainty in amplitude, peak position, background, and HWHM intercept.
-        Higher score = better ability to determine temperature dependence.
-        """)
+            st.markdown(f'Pressurized Score: {format_score(schur_press_score)}')
 
         # Display Full Fisher Information Matrix
+
+        # Traditional summary data
+        with st.expander("Experimental Summary"):
+        
+            summary_data = {
+                "Total # of Measurements": len(st.session_state.all_scans),
+                "Non-Pressurized Measurements": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
+                "Pressurized Measurements": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
+                "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
+                "Temperature Range Covered": f"{st.session_state.all_scans['T'].min():.1f}K to {st.session_state.all_scans['T'].max():.1f}K",
+                "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
+                "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
+                "Time Used": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
+            }
+            
+            cols = st.columns(3)
+            for idx, (key, value) in enumerate(summary_data.items()):
+                cols[idx % 3].metric(key, value)
+            
         with st.expander('Matrix Visualization'):
             if FI_full is not None:
                 tab1, tab2, tab3 = st.tabs(["Fisher Matrix", "Covariance Matrix", "Schur Complement"])
@@ -1121,36 +1108,20 @@ def main():
                         we also have to determine amplitude, peak position, background, and HWHM intercept.
                         """)
             
-        # Traditional summary data
-        st.markdown("### Experimental Summary")
-        
-        summary_data = {
-            "Total # of Measurements": len(st.session_state.all_scans),
-            "Non-Pressurized Measurements": len(st.session_state.all_scans[~st.session_state.all_scans['pressurized']]),
-            "Pressurized Measurements": len(st.session_state.all_scans[st.session_state.all_scans['pressurized']]),
-            "Unique Temperatures": st.session_state.all_scans['T'].nunique(),
-            "Temperature Range Covered": f"{st.session_state.all_scans['T'].min():.1f}K to {st.session_state.all_scans['T'].max():.1f}K",
-            "Total Measurement Time": f"{st.session_state.used_time/3600:.2f} hours",
-            "Remaining Time": f"{max(0, (TIME_BUDGET - st.session_state.used_time)/3600):.2f} hours",
-            "Time Used": f"{min(100, (st.session_state.used_time/TIME_BUDGET)*100):.1f}%"
-        }
-        
-        cols = st.columns(3)
-        for idx, (key, value) in enumerate(summary_data.items()):
-            cols[idx % 3].metric(key, value)
-        
-
     st.markdown('---')
-    st.markdown('## Understanding the Game')
 
-    with st.expander("### The Physics Experiment"):
-        st.markdown("#### Neutron Scattering Model")
-
+    with st.expander("### The Physical Model"):
+        st.markdown("""
+        The physical model in this case is intended as a surrogate model and therefore is not 
+        exactly the same as what one would expect. But the idea is to be as close as is reasonable.
+                    
+        The intensity at an energy E and time T is a sum of the model and temperature dependent backgroudn
+                            """)
         st.latex(r"""
         I(E, T) = S(E, T) + B(T)
         """)
 
-        st.markdown("The scattering function is modeled as a damped harmonic oscillator:")
+        st.markdown("The scattering function S is modeled as a damped harmonic oscillator:")
         st.latex(r"""
         S(E, T)
         =
@@ -1178,6 +1149,7 @@ def main():
         """)
 
         st.markdown("#### Temperature Dependence of Parameters")
+        st.markdown('A is the amplitude, B is the background, and E0 is the center of the DHO.')
 
         st.latex(r"""
         A(T) = A_0 \left( 1 - 0.3 \frac{T - 2}{268} \right)
@@ -1203,7 +1175,7 @@ def main():
         w_3(T)\,\Gamma_3(T)
         """)
 
-        st.markdown("Piecewise-linear segments:")
+        st.markdown("The width is modeled as (smooth) piecewise linear segments:")
         st.latex(r"""
         \Gamma_1(T) = \Gamma_0 \left[ 1 + m_1 (T - T_{\min}) \right]
         """)
@@ -1214,7 +1186,7 @@ def main():
         \Gamma_3(T) = \Gamma_2(T_2) + \Gamma_0 m_3 (T - T_2)
         """)
 
-        st.markdown("Smooth transition weights:")
+        st.markdown("The transitions use a tanh function for smoothing")
         st.latex(r"""
         s_i(T) = \frac{1}{2}
         \left[
@@ -1237,57 +1209,52 @@ def main():
         \end{cases}
         """)
 
-        st.markdown("#### Measurement Statistics")
-
+        st.markdown("#### Measurement Process")
+        st.markdown('Measurements are Poisson observations that depend linearly on count time.')
         st.latex(r"""
         N_i \sim \mathrm{Poisson}\!\left( I(E_i, T) \cdot t_i \right)
         """)
 
-        st.markdown(
-            "Each energy point is measured with Poisson counting statistics, "
-            "which determine the uncertainties and the Fisher information used for scoring."
-        )
-
-    with st.expander('### Experimental Trade-offs'):
-        col1, col2 = st.columns(2)
+    # with st.expander('### Experimental Trade-offs'):
+    #     col1, col2 = st.columns(2)
         
-        with col1:
-            st.markdown("""
-    **Time Management:**
-    - Each measurement costs time
-    - 12 hours total = limited resource
-    - Need to choose: few precise measurements OR many quick ones
+    #     with col1:
+    #         st.markdown("""
+    # **Time Management:**
+    # - Each measurement costs time
+    # - 12 hours total = limited resource
+    # - Need to choose: few precise measurements OR many quick ones
 
-    **Counting Statistics:**
-    - Longer count time → smaller error bars
-    - But fewer total measurements
-    - Poisson statistics: Error ≈ √(counts)
+    # **Counting Statistics:**
+    # - Longer count time → smaller error bars
+    # - But fewer total measurements
+    # - Poisson statistics: Error ≈ √(counts)
 
-    **Temperature Coverage:**
-    - Need measurements at different temperatures to see trends
-    - But each temperature scan takes time
-    - Critical temperatures: 50K, 150K (transition points)
-    """)
+    # **Temperature Coverage:**
+    # - Need measurements at different temperatures to see trends
+    # - But each temperature scan takes time
+    # - Critical temperatures: 50K, 150K (transition points)
+    # """)
         
-        with col2:
-            st.markdown("""
-    **Energy Range Choices:**
-    - Wide range: See full peak shape + background
-    - Narrow range: Focus on peak region, less background
-    - Center position: Must include the actual peak!
+    #     with col2:
+    #         st.markdown("""
+    # **Energy Range Choices:**
+    # - Wide range: See full peak shape + background
+    # - Narrow range: Focus on peak region, less background
+    # - Center position: Must include the actual peak!
 
-    **Points vs. Time:**
-    - More points: Better energy resolution
-    - But each point takes counting time
-    - Fewer points: Quicker scans, but might miss details
+    # **Points vs. Time:**
+    # - More points: Better energy resolution
+    # - But each point takes counting time
+    # - Fewer points: Quicker scans, but might miss details
 
-    **Balance Strategy:**
-    1. Quick scans to find peaks
-    2. Medium scans to map temperature dependence
-    3. Long scans at key temperatures for precision
-    """)
+    # **Balance Strategy:**
+    # 1. Quick scans to find peaks
+    # 2. Medium scans to map temperature dependence
+    # 3. Long scans at key temperatures for precision
+    # """)
 
-    with st.expander('### Measurement Statistics 101'):
+    with st.expander('### Measurement Uncertainty'):
         st.markdown("Let a measurement $y$ depend on location $x$ and parameters $\\theta$:")
 
         st.latex(r"y_i \sim \text{Poisson}(f(x_i; \theta))")
@@ -1351,145 +1318,133 @@ def main():
         \mathcal{I}
         (\theta - \hat{\theta})
         """)
-
         st.markdown("Contours of constant likelihood form **ellipses**.")
 
-    with st.expander('### Fisher Information Score Explained'):
-        st.markdown("""
-    **What is Fisher Information?**
-    A mathematical measure of how much your measurements tell you about the parameters you care about (the slopes of HWHM vs temperature).
+    # with st.expander('### Fisher Information Score Explained'):
+    #     st.markdown("""
+    # **What is Fisher Information?**
+    # A mathematical measure of how much your measurements tell you about the parameters you care about (the slopes of HWHM vs temperature).
 
-    **How is it calculated?**
-    For each measurement point, we compute:
+    # **How is it calculated?**
+    # For each measurement point, we compute:
 
-    $$\\text{Fisher contribution} = \\frac{\\text{count time}}{\\text{count rate}} \\times \\left(\\frac{\\partial\\text{count rate}}{\\partial\\text{parameter}}\\right)^2$$
+    # $$\\text{Fisher contribution} = \\frac{\\text{count time}}{\\text{count rate}} \\times \\left(\\frac{\\partial\\text{count rate}}{\\partial\\text{parameter}}\\right)^2$$
 
-    Then we sum over all measurements.
+    # Then we sum over all measurements.
 
-    **What does your score mean?**
-    - **Higher score** = Better precision in your parameter estimates
-    - **Negative infinity (-∞)** = Not enough data to determine all parameters
-    - **Separate scores** for pressurized vs. non-pressurized samples
+    # **What does your score mean?**
+    # - **Higher score** = Better precision in your parameter estimates
+    # - **Negative infinity (-∞)** = Not enough data to determine all parameters
+    # - **Separate scores** for pressurized vs. non-pressurized samples
 
-    **How to improve your score:**
-    1. Measure where the signal changes most with temperature (near transition points)
-    2. Get good statistics at key temperatures
-    3. Measure both pressurized and non-pressurized
-    4. Cover the full temperature range (2K to 270K)
-    """)
+    # **How to improve your score:**
+    # 1. Measure where the signal changes most with temperature (near transition points)
+    # 2. Get good statistics at key temperatures
+    # 3. Measure both pressurized and non-pressurized
+    # 4. Cover the full temperature range (2K to 270K)
+    # """)
         
 
-    with st.expander('### Bayesian vs Frequentist Thinking'):
-        col1, col2 = st.columns(2)
+    # with st.expander('### Bayesian vs Frequentist Thinking'):
+    #     col1, col2 = st.columns(2)
         
-        with col1:
-            st.markdown("""
-    **Frequentist Approach (What this game uses):**
-    - Parameters have fixed true values
-    - Uncertainty comes from measurement randomness
-    - "95% confidence interval": If we repeated experiment 100 times, 95 intervals would contain true value
-    - Uses Fisher Information to quantify precision
-    """)
+    #     with col1:
+    #         st.markdown("""
+    # **Frequentist Approach (What this game uses):**
+    # - Parameters have fixed true values
+    # - Uncertainty comes from measurement randomness
+    # - "95% confidence interval": If we repeated experiment 100 times, 95 intervals would contain true value
+    # - Uses Fisher Information to quantify precision
+    # """)
         
-        with col2:
-            st.markdown("""
-    **Bayesian Approach (Alternative view):**
-    - Parameters have probability distributions
-    - Start with prior belief, update with data
-    - "95% credible interval": 95% probability true value is in interval
-    - Incorporates prior knowledge explicitly
+    #     with col2:
+    #         st.markdown("""
+    # **Bayesian Approach (Alternative view):**
+    # - Parameters have probability distributions
+    # - Start with prior belief, update with data
+    # - "95% credible interval": 95% probability true value is in interval
+    # - Incorporates prior knowledge explicitly
 
-    **Connection:**
-    With little data: Frequentist and Bayesian can differ
-    With lots of data: They must agree
-    """)
+    # **Connection:**
+    # With little data: Frequentist and Bayesian can differ
+    # With lots of data: They must agree
+    # """)
 
-    with st.expander('### Optimal Experimental Design'):
-        st.markdown("""
-    **The Big Idea:**
-    Instead of measuring randomly, choose measurements that give you the most information!
+    # with st.expander('### Optimal Experimental Design'):
+    #     st.markdown("""
+    # **The Big Idea:**
+    # Instead of measuring randomly, choose measurements that give you the most information!
 
-    **Information-Rich Measurements:**
-    1. **Where model is sensitive**: Measure where count rate changes a lot when parameters change
-    2. **Where uncertainty is high**: Focus on regions with currently poor constraints
-    3. **Where it matters most**: For HWHM, measure near the peak edges
+    # **Information-Rich Measurements:**
+    # 1. **Where model is sensitive**: Measure where count rate changes a lot when parameters change
+    # 2. **Where uncertainty is high**: Focus on regions with currently poor constraints
+    # 3. **Where it matters most**: For HWHM, measure near the peak edges
 
-    **Real-World Analogy:**
-    Imagine trying to map a mountain:
-    - **Bad strategy**: Measure everywhere equally
-    - **Good strategy**: Focus on the slopes (where elevation changes)
-    - **Best strategy**: Measure slopes AND connect different sides
+    # **Real-World Analogy:**
+    # Imagine trying to map a mountain:
+    # - **Bad strategy**: Measure everywhere equally
+    # - **Good strategy**: Focus on the slopes (where elevation changes)
+    # - **Best strategy**: Measure slopes AND connect different sides
 
-    **In This Game:**
-    The Fisher score tells you how well you're doing. Try different strategies:
-    - Many temperatures with few points?
-    - Few temperatures with many points?
-    - Mix of both?
-    """)
+    # **In This Game:**
+    # The Fisher score tells you how well you're doing. Try different strategies:
+    # - Many temperatures with few points?
+    # - Few temperatures with many points?
+    # - Mix of both?
+    # """)
 
-    with st.expander('### Practical Tips for Success'):
-        st.markdown("""
-    **Getting Started:**
-    1. **Quick reconnaissance**: Do fast scans at 50K, 150K, 250K for both samples
-    2. **Find the peaks**: Adjust energy center to capture the peak
-    3. **Check theory lines**: Use them as guides (toggle on/off with button)
+    # with st.expander('### Practical Tips for Success'):
+    #     st.markdown("""
+    # **Getting Started:**
+    # 1. **Quick reconnaissance**: Do fast scans at 50K, 150K, 250K for both samples
+    # 2. **Find the peaks**: Adjust energy center to capture the peak
+    # 3. **Check theory lines**: Use them as guides (toggle on/off with button)
 
-    **Intermediate Strategy:**
-    4. **Identify key regions**: Where does HWHM change most? Focus there!
-    5. **Balance samples**: Don't neglect one sample type
-    6. **Watch transition points**: 50K and 150K are important
+    # **Intermediate Strategy:**
+    # 4. **Identify key regions**: Where does HWHM change most? Focus there!
+    # 5. **Balance samples**: Don't neglect one sample type
+    # 6. **Watch transition points**: 50K and 150K are important
 
-    **Advanced Optimization:**
-    7. **Check Fisher score often**: Are you making progress?
-    8. **Adjust based on results**: If score is -∞, need more data
-    9. **Time management**: Leave buffer at the end for final precision scans
+    # **Advanced Optimization:**
+    # 7. **Check Fisher score often**: Are you making progress?
+    # 8. **Adjust based on results**: If score is -∞, need more data
+    # 9. **Time management**: Leave buffer at the end for final precision scans
 
-    **Common Pitfalls:**
-    - ⚠️ **Too few temperatures**: Can't see temperature dependence
-    - ⚠️ **Too many points per scan**: Wastes time, fewer temperatures
-    - ⚠️ **Wrong energy range**: Missing the peak entirely
-    - ⚠️ **Ignoring one sample**: Incomplete comparison
-    """)
+    # **Common Pitfalls:**
+    # - ⚠️ **Too few temperatures**: Can't see temperature dependence
+    # - ⚠️ **Too many points per scan**: Wastes time, fewer temperatures
+    # - ⚠️ **Wrong energy range**: Missing the peak entirely
+    # - ⚠️ **Ignoring one sample**: Incomplete comparison
+    # """)
 
-    with st.expander('### Real-World Applications'):
-        st.markdown("""
-    **Why This Matters in Real Science:**
+    # with st.expander('### Real-World Applications'):
+    #     st.markdown("""
+    # **Why This Matters in Real Science:**
 
-    **1. Neutron Scattering Facilities:**
-    - Cost millions to build and operate
-    - Beam time is precious (hours cost thousands of dollars)
-    - Researchers compete for limited time slots
+    # **1. Neutron Scattering Facilities:**
+    # - Cost millions to build and operate
+    # - Beam time is precious (hours cost thousands of dollars)
+    # - Researchers compete for limited time slots
 
-    **2. Materials Discovery:**
-    - High-temperature superconductors
-    - Thermoelectric materials
-    - Battery materials
-    - Quantum materials
+    # **2. Materials Discovery:**
+    # - High-temperature superconductors
+    # - Thermoelectric materials
+    # - Battery materials
+    # - Quantum materials
 
-    **3. Broader Applications:**
-    - **Pharmaceuticals**: Drug crystal structure analysis
-    - **Engineering**: Stress analysis in materials
-    - **Energy**: Fuel cell and battery research
-    - **Quantum computing**: Material characterization
+    # **3. Broader Applications:**
+    # - **Pharmaceuticals**: Drug crystal structure analysis
+    # - **Engineering**: Stress analysis in materials
+    # - **Energy**: Fuel cell and battery research
+    # - **Quantum computing**: Material characterization
 
-    **Your Role as Experimentalist:**
-    Even with automation, humans need to:
-    - Set scientific goals
-    - Interpret results
-    - Make strategic decisions
-    - Understand the underlying physics
-    """)
-
-    st.markdown("---")
-    st.info("""
-    **Quick Reference:**
-    - **Goal**: Maximize Fisher score within 12 hours
-    - **Key temperatures**: 50K and 150K (transition points)
-    - **Both samples**: Pressurized AND non-pressurized
-    - **Watch time**: Each scan costs time!
-    - **Use theory lines**: They guide you to the right energy range
-    """)
-
+    # **Your Role as Experimentalist:**
+    # Even with automation, humans need to:
+    # - Set scientific goals
+    # - Interpret results
+    # - Make strategic decisions
+    # - Understand the underlying physics
+    # """)
 
 
 # ============================================================
