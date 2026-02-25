@@ -9,7 +9,9 @@ import matplotlib as mpl
 import matplotlib.gridspec 
 from time import perf_counter
 from jax.flatten_util import ravel_pytree
-
+import json
+import threading
+from pathlib import Path
 
 # ============================================================
 # Streamlit Configuration
@@ -89,6 +91,40 @@ def initialize_session_state():
         st.session_state.enable_profiling = False
     if 'jax_warmed_up' not in st.session_state:
         st.session_state.jax_warmed_up = False
+
+# ============================================================
+# Global High Score Persistence
+# ============================================================
+
+SCORE_FILE = Path("global_high_score.json")
+_SCORE_LOCK = threading.Lock()
+
+def _default_score_data():
+    return {
+        "high_score": -float("inf"),
+        "best_run": None,
+    }
+
+def load_global_high_score():
+    """Load global high score from disk."""
+    if not SCORE_FILE.exists():
+        return _default_score_data()
+
+    try:
+        with SCORE_FILE.open("r") as f:
+            return json.load(f)
+    except Exception:
+        return _default_score_data()
+
+def save_global_high_score(score_data):
+    """Save global high score to disk (thread-safe)."""
+    with _SCORE_LOCK:
+        with SCORE_FILE.open("w") as f:
+            json.dump(score_data, f)
+
+@st.cache_data
+def get_cached_global_score():
+    return load_global_high_score()
 
 # ============================================================
 # Physics Constants
@@ -921,37 +957,43 @@ parameters governing the width of the peak as a function of temperature. The gam
         FI_full, param_names_full = compute_total_fisher_matrix_all_params()
         current_score = compute_fisher_log_det(FI_full)
 
-        # Initialize high score in session state if not present
-        if 'high_score' not in st.session_state:
-            st.session_state.high_score = -np.inf
-        if 'best_run_data' not in st.session_state:
-            st.session_state.best_run_data = None
+        # ============================================================
+        # Global High Score Logic
+        # ============================================================
 
-        # Update high score if current score is better
-        if current_score > st.session_state.high_score and not np.isinf(current_score):
-            st.session_state.high_score = current_score
-            st.session_state.best_run_data = {
-                'score': current_score,
-                'scans': st.session_state.all_scans.copy(),
-                'time_used': st.session_state.used_time,
-                'n_measurements': len(st.session_state.all_scans)
+        global_score_data = get_cached_global_score()
+        global_high_score = global_score_data["high_score"]
+
+        if current_score > global_high_score and not np.isinf(current_score):
+
+            new_score_data = {
+                "high_score": float(current_score),
+                "best_run": {
+                    "score": float(current_score),
+                    "time_used": float(st.session_state.used_time),
+                    "n_measurements": int(len(st.session_state.all_scans)),
+                },
             }
 
-        # Display metrics
+            save_global_high_score(new_score_data)
+            st.cache_data.clear()  # force reload for all users
+
+            global_high_score = current_score
+            
         with col1:
             st.metric(
                 "Current Score",
                 f"{current_score:.2f}" if not np.isinf(current_score) else "No data",
-                delta=None
             )
 
         with col2:
             st.metric(
-                "🏆 High Score",
-                f"{st.session_state.high_score:.2f}" if st.session_state.high_score > -np.inf else "No data",
-                delta=f"{current_score - st.session_state.high_score:.2f}" if st.session_state.high_score > -np.inf and not np.isinf(current_score) else None
+                "🌍 Global High Score",
+                f"{global_high_score:.2f}" if global_high_score > -np.inf else "No data",
+                delta=f"{current_score - global_high_score:.2f}"
+                if global_high_score > -np.inf and not np.isinf(current_score)
+                else None,
             )
-
 
         # Data summary and other expanders continue here...
         st.markdown("---")
