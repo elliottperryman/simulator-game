@@ -135,7 +135,7 @@ min_t, max_t = 2, 270
 # ============================================================
 # Game Settings
 # ============================================================
-TIME_BUDGET = 12 * 3600  # 12 hours in seconds
+TIME_BUDGET = 4 * 3600  # 12 hours in seconds
 
 def get_empty_scans_df():
     """Return an empty DataFrame with the correct schema"""
@@ -849,7 +849,7 @@ def main():
 Imagine you are an experimentalist that wants to understand how pressure effects your crystal. You have two samples of your crystal, and you have applied a 
 uniaxial pressure to one sample. You are making scans at different energy transfer values (the x axis) and observing the neutron intensity (the y axis).
 You believe that the bump you observe has a width that changes with temperature and changes differently for the two samples. Your goal is to use your limited 
-beamtime to measure as much useful information as possible. You have 12 hours and the controls on the left. You are scored based on the precision of the 
+beamtime to measure as much useful information as possible. You have 4 hours and the controls on the left. You are scored based on the precision of the 
 parameters governing the width of the peak as a function of temperature. The game will stop when you request more time than is available. Good luck!
                 
 """)
@@ -898,7 +898,7 @@ parameters governing the width of the peak as a function of temperature. The gam
             "Counting Time per Point [s]",
             min_value=1.0,
             max_value=800.0,
-            step=30.0,
+            step=1.0,
             key="ct_slider",
             help="Time spent measuring each energy point"
         )
@@ -906,9 +906,9 @@ parameters governing the width of the peak as a function of temperature. The gam
         st.slider(
             "Number of Points",
             min_value=1,
-            max_value=100,
+            max_value=51,
             key='np_slider',
-            step=10,
+            step=2,
             help="Number of energy points in the scan"
         )
         
